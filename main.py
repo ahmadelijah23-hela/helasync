@@ -12,9 +12,21 @@ def cds_services():
         "services": [
             {
                 "hook": "patient-view",
-                "title": "HeLaSync Clinical Trial Matching",
-                "description": "Matches patients to potentially eligible clinical trials",
-                "id": "helasync-trial-matching"
+                "title": "HeLaSync",
+                "description": "HeLaSync CDS service",
+                "id": "helasync"
+            }
+        ]
+    }
+
+@app.post("/cds-services/helasync")
+def helasync():
+    return {
+        "cards": [
+            {
+                "summary": "Hello from HeLaSync",
+                "detail": "HeLaSync is successfully connected to CDS Hooks.",
+                "indicator": "info"
             }
         ]
     }
