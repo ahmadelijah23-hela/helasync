@@ -5,7 +5,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["https://sandbox.cds-hooks.org/"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
