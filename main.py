@@ -32,8 +32,8 @@ def helasync():
     return {
         "cards": [
             {
-                "summary": "Hello from HeLaSync",
-                "detail": "HeLaSync is successfully connected to CDS Hooks.",
+                "summary": "Hello Manny",
+                "detail": "Pototype Complete.",
                 "indicator": "info"
             }
         ]
