@@ -14,7 +14,7 @@ app.add_middleware(
 def home():
     return {"message": "Hello World"}
 
-@app.get("/cds-services")
+@app.get("")
 def cds_services():
     return {
         "services": [
