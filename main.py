@@ -4,7 +4,7 @@ app = FastAPI()
 
 @app.get("/")
 def home():
-    return {"message": "HeLaSync backend is running"}
+    return {"message": "Hello World"}
 
 @app.get("/cds-services")
 def cds_services():
