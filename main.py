@@ -1,3 +1,5 @@
+import json
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -7,20 +9,11 @@ from google.genai import types
 
 from agent import root_agent
 
-import json
-
-
-# ============================================
-# FASTAPI
-# ============================================
 
 app = FastAPI(title="HeLaSync CDS Hooks Service")
 
 
-# ============================================
 # CORS
-# ============================================
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -29,10 +22,7 @@ app.add_middleware(
 )
 
 
-# ============================================
-# ADK SETUP
-# ============================================
-
+# ADK session service
 session_service = InMemorySessionService()
 
 runner = Runner(
@@ -42,10 +32,7 @@ runner = Runner(
 )
 
 
-# ============================================
-# HOME
-# ============================================
-
+# Home
 @app.get("/")
 def home():
     return {
@@ -53,10 +40,7 @@ def home():
     }
 
 
-# ============================================
-# CDS HOOKS DISCOVERY
-# ============================================
-
+# CDS Hooks discovery
 @app.get("/cds-services")
 def cds_services():
     return {
@@ -64,37 +48,27 @@ def cds_services():
             {
                 "hook": "patient-view",
                 "title": "HeLaSync",
-                "description": "HeLaSync clinical trial matching service",
+                "description": "Clinical trial matching service",
                 "id": "helasync"
             }
         ]
     }
 
 
-# ============================================
-# HELASYNC CDS HOOK
-# ============================================
-
+# CDS Hooks service
 @app.post("/cds-services/helasync")
 async def helasync(request: Request):
 
-    # ----------------------------------------
     # Receive CDS Hooks request
-    # ----------------------------------------
-
     cds_request = await request.json()
 
-    print("\n================================")
+    print("================================")
     print("CDS HOOK REQUEST RECEIVED")
     print("================================")
-
     print(json.dumps(cds_request, indent=2))
 
 
-    # ----------------------------------------
-    # Extract FHIR prefetch data
-    # ----------------------------------------
-
+    # Get FHIR data from CDS Hooks prefetch
     prefetch = cds_request.get("prefetch", {})
 
     fhir_bundle = {
@@ -104,10 +78,7 @@ async def helasync(request: Request):
     }
 
 
-    # ----------------------------------------
-    # Convert prefetch data into FHIR Bundle
-    # ----------------------------------------
-
+    # Convert prefetch resources into one FHIR Bundle
     for key, resource in prefetch.items():
 
         if not resource:
@@ -116,13 +87,13 @@ async def helasync(request: Request):
         if not isinstance(resource, dict):
             continue
 
-        # If the resource is already a Bundle
+        # Already a FHIR Bundle
         if resource.get("resourceType") == "Bundle":
 
             for entry in resource.get("entry", []):
                 fhir_bundle["entry"].append(entry)
 
-        # If the resource is a single FHIR resource
+        # Single FHIR resource
         elif resource.get("resourceType"):
 
             fhir_bundle["entry"].append({
@@ -130,17 +101,13 @@ async def helasync(request: Request):
             })
 
 
-    print("\n================================")
-    print("FHIR BUNDLE SENT TO HELASYNC")
     print("================================")
-
+    print("FHIR BUNDLE SENT TO AGENTS")
+    print("================================")
     print(json.dumps(fhir_bundle, indent=2))
 
 
-    # ----------------------------------------
     # Create ADK session
-    # ----------------------------------------
-
     user_id = "helasync-user"
 
     session_id = cds_request.get(
@@ -148,24 +115,19 @@ async def helasync(request: Request):
         "helasync-session"
     )
 
-    try:
 
+    try:
         await session_service.create_session(
             app_name="helasync",
             user_id=user_id,
             session_id=session_id
         )
-
     except Exception:
-
-        # Session already exists
+        # Session may already exist
         pass
 
 
-    # ----------------------------------------
-    # Send FHIR Bundle to ADK
-    # ----------------------------------------
-
+    # Send FHIR patient data to the HeLaSync pipeline
     message = types.Content(
         role="user",
         parts=[
@@ -173,7 +135,7 @@ async def helasync(request: Request):
                 text=f"""
 Run the complete HeLaSync clinical trial matching pipeline.
 
-Use the FHIR Bundle below as the patient information.
+Use the following FHIR Bundle as the patient's clinical information.
 
 FHIR Bundle:
 
@@ -193,10 +155,7 @@ Return ONLY the final JSON output from Agent 4.
     )
 
 
-    # ----------------------------------------
     # Run the ADK pipeline
-    # ----------------------------------------
-
     final_output = None
 
     async for event in runner.run_async(
@@ -212,32 +171,20 @@ Return ONLY the final JSON output from Agent 4.
                 final_output = event.content.parts[0].text
 
 
-    # ----------------------------------------
-    # Print Agent 4 result
-    # ----------------------------------------
-
-    print("\n================================")
+    print("================================")
     print("AGENT 4 OUTPUT")
     print("================================")
-
     print(final_output)
 
 
-    # ----------------------------------------
-    # Return CDS Hooks response
-    # ----------------------------------------
-
+    # Return empty response if no output
     if not final_output:
-
         return {
             "cards": []
         }
 
 
-    # ----------------------------------------
-    # Convert Agent 4 JSON into response
-    # ----------------------------------------
-
+    # Convert Agent 4 output to CDS Hooks JSON
     try:
 
         agent_result = json.loads(final_output)
