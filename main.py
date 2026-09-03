@@ -35,6 +35,16 @@ def helasync():
                 "summary": "Clinical Trial Opportunity",
                 "detail": "This patient may qualify for a clinical trial.",
                 "indicator": "info"
-            }
+                "Source: {
+                "label": "HeLaSync",
+                "url": "https://www.helasync.org"
+            },
+               "suggestions": [
+            {
+                "label": "Refer Patient"
+                "uuid": "123",
+       "actions": []
+            
         ]
     }
+ 
