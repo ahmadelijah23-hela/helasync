@@ -32,8 +32,8 @@ def helasync():
     return {
         "cards": [
             {
-                "summary": "Hello Manny",
-                "detail": "Pototype Complete.",
+                "summary": "Clinical Trial Opportunity",
+                "detail": "This patient may qualify for a clinical trial.",
                 "indicator": "info"
             }
         ]
