@@ -10,9 +10,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.get("/")
 def home():
     return {"message": "Hello World"}
+
 
 @app.get("/cds-services")
 def cds_services():
@@ -27,6 +29,7 @@ def cds_services():
         ]
     }
 
+
 @app.post("/cds-services/helasync")
 def helasync():
     return {
@@ -34,17 +37,19 @@ def helasync():
             {
                 "summary": "Clinical Trial Opportunity",
                 "detail": "This patient may qualify for a clinical trial.",
-                "indicator": "info"
-                "Source: {
-                "label": "HeLaSync",
-                "url": "https://www.helasync.org"
-            },
-               "suggestions": [
-            {
-                "label": "Refer Patient"
-                "uuid": "123",
-       "actions": []
-            
+                "indicator": "info",
+                "source": {
+                    "label": "HeLaSync",
+                    "url": "https://www.helasync.org"
+                },
+                "suggestions": [
+                    {
+                        "label": "Refer Patient",
+                        "uuid": "123",
+                        "actions": []
+                    }
+                ]
+            }
         ]
     }
  
