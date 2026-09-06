@@ -143,12 +143,13 @@ FHIR Bundle:
 
 Process the patient through:
 
-1. Patient Summary Agent
-2. Trial Matching Agent
-3. Eligibility Verification Agent
-4. CDS Card Agent
+1. Patient Data Agent
+2. Clinical Profile Agent
+3. Trial Matching Agent
+4. Eligibility Verification Agent
+5. CDS Card Agent
 
-Return ONLY the final JSON output from Agent 4.
+Return ONLY the final JSON output from Agent 5.
 """
             )
         ]
@@ -172,7 +173,7 @@ Return ONLY the final JSON output from Agent 4.
 
 
     print("================================")
-    print("AGENT 4 OUTPUT")
+    print("AGENT 5 OUTPUT")
     print("================================")
     print(final_output)
 
@@ -184,7 +185,7 @@ Return ONLY the final JSON output from Agent 4.
         }
 
 
-    # Convert Agent 4 output to CDS Hooks JSON
+    # Convert Agent 5 output to CDS Hooks JSON
     try:
 
         agent_result = json.loads(final_output)
@@ -193,7 +194,7 @@ Return ONLY the final JSON output from Agent 4.
 
     except json.JSONDecodeError:
 
-        print("WARNING: Agent 4 did not return valid JSON.")
+        print("WARNING: Agent 5 did not return valid JSON.")
 
         return {
             "cards": [
