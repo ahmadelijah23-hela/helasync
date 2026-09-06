@@ -1,1 +1,29 @@
-
+{
+  "protocolSection": {
+    "identificationModule": {
+      "nctId": "NCTFAKE001",
+      "briefTitle": "Type 2 Diabetes Cardiovascular Study"
+    },
+    "statusModule": {
+      "overallStatus": "RECRUITING"
+    },
+    "conditionsModule": {
+      "conditions": [
+        "Type 2 Diabetes Mellitus",
+        "Cardiovascular Disease"
+      ]
+    },
+    "designModule": {
+      "studyType": "INTERVENTIONAL",
+      "phases": [
+        "PHASE3"
+      ]
+    },
+    "eligibilityModule": {
+      "eligibilityCriteria": "Inclusion Criteria:\n1. Age 18 or older.\n2. Diagnosis of Type 2 Diabetes.\n3. HbA1c between 6.5% and 8.0%.\n\nExclusion Criteria:\n1. History of heart failure.\n2. Current pregnancy.\n3. eGFR below 30 mL/min/1.73 m2.",
+      "healthyVolunteers": false,
+      "sex": "ALL",
+      "minimumAge": "18 Years"
+    }
+  }
+}
