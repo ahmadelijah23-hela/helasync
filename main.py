@@ -5,6 +5,10 @@ from typing import Dict, Any
 from privacy.gateway import PrivacyGateway
 
 
+# --------------------------------------------------
+# FastAPI Application
+# --------------------------------------------------
+
 app = FastAPI(
     title="HeLaSync API",
     description="HeLaSync Clinical Trial Matching and CDS API",
@@ -110,33 +114,126 @@ def cds_services():
 # --------------------------------------------------
 
 @app.post("/cds-services/helasync")
-def helasync():
+def helasync(request: Dict[str, Any]):
 
-    return {
-        "cards": [
-            {
-                "summary": "Potential Clinical Trial Match",
+    try:
 
-                "indicator": "info",
+        # ------------------------------------------
+        # Get CDS Hooks prefetch data
+        # ------------------------------------------
 
-                "detail": (
-                    "This patient may be eligible for a "
-                    "clinical trial. Ask the patient if "
-                    "they are interested in learning more."
-                ),
+        prefetch = request.get(
+            "prefetch",
+            {}
+        )
 
-                "source": {
-                    "label": "HeLaSync",
-                    "url": "https://www.helasync.org"
-                },
+        patient = prefetch.get(
+            "patient"
+        )
 
-                "links": [
+        # ------------------------------------------
+        # No patient data
+        # ------------------------------------------
+
+        if not patient:
+
+            return {
+                "cards": [
                     {
-                        "label": "View Clinical Trial",
-                        "url": "https://www.helasync.org",
-                        "type": "absolute"
+                        "summary": "HeLaSync",
+                        "indicator": "info",
+                        "detail": (
+                            "No patient data was available "
+                            "for this CDS Hooks request."
+                        ),
+                        "source": {
+                            "label": "HeLaSync",
+                            "url": "https://www.helasync.org"
+                        }
                     }
                 ]
             }
-        ]
-    }
+
+        # ------------------------------------------
+        # Send patient through Privacy Gateway
+        # ------------------------------------------
+
+        sanitized_patient = (
+            privacy_gateway.process_patient(
+                patient
+            )
+        )
+
+        # ------------------------------------------
+        # Temporary logging
+        # ------------------------------------------
+        #
+        # This allows us to verify that the patient
+        # has been processed by the Privacy Gateway.
+        #
+        # IMPORTANT:
+        # Do not log real patient data in production.
+        #
+
+        print(
+            "Sanitized patient:",
+            sanitized_patient
+        )
+
+        # ------------------------------------------
+        # Return CDS Hooks Card
+        # ------------------------------------------
+
+        return {
+            "cards": [
+                {
+                    "summary": "Potential Clinical Trial Match",
+                    "indicator": "info",
+                    "detail": (
+                        "HeLaSync processed the patient "
+                        "through the Privacy Gateway. "
+                        "This patient may be eligible "
+                        "for a clinical trial."
+                    ),
+                    "source": {
+                        "label": "HeLaSync",
+                        "url": "https://www.helasync.org"
+                    },
+                    "links": [
+                        {
+                            "label": "View Clinical Trial",
+                            "url": "https://www.helasync.org",
+                            "type": "absolute"
+                        }
+                    ]
+                }
+            ]
+        }
+
+    except Exception as e:
+
+        # ------------------------------------------
+        # Error handling
+        # ------------------------------------------
+
+        print(
+            "HeLaSync CDS error:",
+            str(e)
+        )
+
+        return {
+            "cards": [
+                {
+                    "summary": "HeLaSync",
+                    "indicator": "warning",
+                    "detail": (
+                        "HeLaSync was unable to process "
+                        "the patient data."
+                    ),
+                    "source": {
+                        "label": "HeLaSync",
+                        "url": "https://www.helasync.org"
+                    }
+                }
+            ]
+        }
