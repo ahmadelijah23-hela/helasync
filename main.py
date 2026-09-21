@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict, Any
 
 from privacy.gateway import PrivacyGateway
+from agents.patient_profile_agent import patient_profile_agent
 
 
 # ==================================================
@@ -225,11 +226,11 @@ def helasync(
 
 
         # ------------------------------------------
-        # TEMPORARY DEBUG LOG
+        # TEMPORARY DEVELOPMENT LOG
         # ------------------------------------------
         #
         # IMPORTANT:
-        # This is only for development/testing.
+        # This is for development/testing only.
         # Do NOT log patient data in production.
         #
 
@@ -259,7 +260,8 @@ def helasync(
                         "HeLaSync processed the patient's "
                         "clinical information through the "
                         "Privacy Gateway. This patient may "
-                        "be eligible for a clinical trial."
+                        "be potentially eligible for a "
+                        "clinical trial."
                     ),
 
                     "source": {
