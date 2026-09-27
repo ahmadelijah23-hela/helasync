@@ -270,7 +270,7 @@ def helasync(
                             "HeLaSync",
 
                         "url":
-                            "https://www.helasync.org"
+                            "/launch?trial=hls-htn-001&reasons=Systolic%20BP%20above%20target|Hypertension%20on%20problem%20list"
                     },
 
                     "links": [
@@ -281,7 +281,7 @@ def helasync(
                                 "View Clinical Trial",
 
                             "url":
-                                "https://www.helasync.org",
+                                "/launch?trial=hls-htn-001&reasons=Systolic%20BP%20above%20target|Hypertension%20on%20problem%20list",
 
                             "type":
                                 "absolute"
