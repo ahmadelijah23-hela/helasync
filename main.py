@@ -251,7 +251,7 @@ def helasync(
                 {
 
                     "summary":
-                        "Potential Clinical Trial Match",
+                        "Potential Trial Match",
 
                     "indicator":
                         "info",
