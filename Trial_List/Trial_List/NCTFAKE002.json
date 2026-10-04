@@ -1,0 +1,29 @@
+{
+  "protocolSection": {
+    "identificationModule": {
+      "nctId": "NCTFAKE002",
+      "briefTitle": "Cardiac Amyloidosis Heart Failure Study"
+    },
+    "statusModule": {
+      "overallStatus": "RECRUITING"
+    },
+    "conditionsModule": {
+      "conditions": [
+        "Heart Failure",
+        "Cardiac Amyloidosis"
+      ]
+    },
+    "designModule": {
+      "studyType": "INTERVENTIONAL",
+      "phases": [
+        "PHASE3"
+      ]
+    },
+    "eligibilityModule": {
+      "eligibilityCriteria": "Inclusion Criteria:\n1. Age 18 or older.\n2. Diagnosis of heart failure.\n3. Confirmed diagnosis of cardiac amyloidosis.\n4. NT-proBNP above 300 pg/mL.\n\nExclusion Criteria:\n1. Pregnancy.\n2. eGFR below 30 mL/min/1.73 m2.",
+      "healthyVolunteers": false,
+      "sex": "ALL",
+      "minimumAge": "18 Years"
+    }
+  }
+}
