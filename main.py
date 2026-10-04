@@ -1,9 +1,14 @@
-```python
 import os
+import json
+import uuid
 from typing import Dict, Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService
+from google.genai import types
 
 from privacy.gateway import PrivacyGateway
 from agent import root_agent
@@ -33,10 +38,38 @@ app.add_middleware(
 
 
 # ============================================================
+# ENVIRONMENT
+# ============================================================
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+if not GEMINI_API_KEY:
+    print("WARNING: GEMINI_API_KEY is not configured.")
+
+
+# ============================================================
 # PRIVACY GATEWAY
 # ============================================================
 
 privacy_gateway = PrivacyGateway()
+
+
+# ============================================================
+# ADK SESSION SERVICE
+# ============================================================
+
+session_service = InMemorySessionService()
+
+
+# ============================================================
+# ADK RUNNER
+# ============================================================
+
+runner = Runner(
+    agent=root_agent,
+    app_name="helasync",
+    session_service=session_service
+)
 
 
 # ============================================================
@@ -49,7 +82,7 @@ def home():
     return {
         "message": "HeLaSync API is running",
         "status": "healthy",
-        "agent_pipeline": "5-agent pipeline loaded"
+        "pipeline": "5-agent clinical trial matching pipeline"
     }
 
 
@@ -112,12 +145,15 @@ def cds_services():
         "services": [
             {
                 "hook": "patient-view",
+
                 "title": "HeLaSync",
+
                 "description": (
-                    "HeLaSync identifies potential "
-                    "clinical trial opportunities "
-                    "during routine patient care."
+                    "HeLaSync identifies potential clinical "
+                    "trial opportunities during routine "
+                    "patient care."
                 ),
+
                 "id": "helasync",
 
                 "prefetch": {
@@ -140,6 +176,191 @@ def cds_services():
 
 
 # ============================================================
+# RUN FIVE-AGENT PIPELINE
+# ============================================================
+
+async def run_helasync_agents(
+    patient_data: Dict[str, Any]
+):
+
+    # --------------------------------------------------------
+    # Create unique user/session IDs
+    # --------------------------------------------------------
+
+    user_id = "helasync-clinician"
+
+    session_id = str(uuid.uuid4())
+
+
+    # --------------------------------------------------------
+    # Create ADK session
+    # --------------------------------------------------------
+
+    await session_service.create_session(
+        app_name="helasync",
+        user_id=user_id,
+        session_id=session_id
+    )
+
+
+    # --------------------------------------------------------
+    # Convert patient information to JSON
+    # --------------------------------------------------------
+
+    patient_json = json.dumps(
+        patient_data,
+        indent=2,
+        default=str
+    )
+
+
+    # --------------------------------------------------------
+    # Prompt Agent 1
+    # --------------------------------------------------------
+
+    prompt = f"""
+You are running the HeLaSync five-agent clinical trial
+matching pipeline.
+
+The following is the available patient FHIR information.
+
+IMPORTANT:
+
+- Use only the information provided.
+- Do not invent patient information.
+- Do not make a final clinical decision.
+- Follow the instructions of each HeLaSync agent.
+
+PATIENT FHIR DATA:
+
+{patient_json}
+
+Begin the HeLaSync five-agent pipeline.
+"""
+
+
+    # --------------------------------------------------------
+    # Create ADK message
+    # --------------------------------------------------------
+
+    message = types.Content(
+        role="user",
+        parts=[
+            types.Part(
+                text=prompt
+            )
+        ]
+    )
+
+
+    # --------------------------------------------------------
+    # Execute SequentialAgent
+    # --------------------------------------------------------
+
+    final_text = None
+
+    async for event in runner.run_async(
+        user_id=user_id,
+        session_id=session_id,
+        new_message=message
+    ):
+
+        # ----------------------------------------------------
+        # Look for the final agent response
+        # ----------------------------------------------------
+
+        if event.is_final_response():
+
+            if event.content and event.content.parts:
+
+                for part in event.content.parts:
+
+                    if part.text:
+
+                        final_text = part.text
+
+
+    # --------------------------------------------------------
+    # Make sure we received something
+    # --------------------------------------------------------
+
+    if not final_text:
+
+        raise RuntimeError(
+            "The HeLaSync agent pipeline did not return a response."
+        )
+
+
+    return final_text
+
+
+# ============================================================
+# PARSE CDS CARD
+# ============================================================
+
+def parse_agent_response(
+    agent_response: str
+):
+
+    # --------------------------------------------------------
+    # Remove markdown JSON fences if Gemini returns them
+    # --------------------------------------------------------
+
+    cleaned = agent_response.strip()
+
+    if cleaned.startswith("```json"):
+
+        cleaned = cleaned[7:]
+
+    elif cleaned.startswith("```"):
+
+        cleaned = cleaned[3:]
+
+
+    if cleaned.endswith("```"):
+
+        cleaned = cleaned[:-3]
+
+
+    cleaned = cleaned.strip()
+
+
+    # --------------------------------------------------------
+    # Parse JSON
+    # --------------------------------------------------------
+
+    try:
+
+        result = json.loads(cleaned)
+
+        return result
+
+    except json.JSONDecodeError:
+
+        # ----------------------------------------------------
+        # If the final agent did not return valid JSON,
+        # return a safe CDS card instead of crashing.
+        # ----------------------------------------------------
+
+        return {
+            "cards": [
+                {
+                    "summary": "HeLaSync",
+                    "indicator": "warning",
+                    "detail": (
+                        "HeLaSync completed the automated "
+                        "assessment, but the CDS card could "
+                        "not be formatted automatically."
+                    ),
+                    "source": {
+                        "label": "HeLaSync"
+                    }
+                }
+            ]
+        }
+
+
+# ============================================================
 # HELASYNC CDS HOOK
 # ============================================================
 
@@ -151,7 +372,33 @@ async def helasync(
     try:
 
         # ----------------------------------------------------
-        # GET CDS HOOKS PREFETCH DATA
+        # Check Gemini API key
+        # ----------------------------------------------------
+
+        if not GEMINI_API_KEY:
+
+            return {
+                "cards": [
+                    {
+                        "summary": "HeLaSync Configuration Error",
+
+                        "indicator": "warning",
+
+                        "detail": (
+                            "The Gemini API key has not been "
+                            "configured on the HeLaSync server."
+                        ),
+
+                        "source": {
+                            "label": "HeLaSync"
+                        }
+                    }
+                ]
+            }
+
+
+        # ----------------------------------------------------
+        # Get CDS Hooks prefetch
         # ----------------------------------------------------
 
         prefetch = request.get(
@@ -161,37 +408,22 @@ async def helasync(
 
 
         # ----------------------------------------------------
-        # PATIENT
+        # Extract FHIR resources
         # ----------------------------------------------------
 
         patient = prefetch.get(
             "patient"
         )
 
-
-        # ----------------------------------------------------
-        # CONDITIONS
-        # ----------------------------------------------------
-
         conditions = prefetch.get(
             "conditions",
             {}
         )
 
-
-        # ----------------------------------------------------
-        # MEDICATIONS
-        # ----------------------------------------------------
-
         medications = prefetch.get(
             "medications",
             {}
         )
-
-
-        # ----------------------------------------------------
-        # OBSERVATIONS
-        # ----------------------------------------------------
 
         observations = prefetch.get(
             "observations",
@@ -200,7 +432,7 @@ async def helasync(
 
 
         # ----------------------------------------------------
-        # CHECK FOR PATIENT
+        # Check patient
         # ----------------------------------------------------
 
         if not patient:
@@ -226,99 +458,104 @@ async def helasync(
 
 
         # ----------------------------------------------------
-        # SEND DATA THROUGH PRIVACY GATEWAY
+        # PRIVACY GATEWAY
         # ----------------------------------------------------
 
-        sanitized_patient = privacy_gateway.process_patient(
+        sanitized_patient = (
+            privacy_gateway.process_patient(
 
-            patient=patient,
+                patient=patient,
 
-            conditions=conditions,
+                conditions=conditions,
 
-            medications=medications,
+                medications=medications,
 
-            observations=observations
+                observations=observations
+            )
         )
 
 
         # ----------------------------------------------------
-        # DEVELOPMENT LOG
-        # ----------------------------------------------------
-        #
-        # IMPORTANT:
-        # Do not log patient data in production.
-        #
-
-        print(
-            "HeLaSync received CDS request."
-        )
-
-
-        # ----------------------------------------------------
-        # PREPARE DATA FOR THE 5-AGENT PIPELINE
+        # Create data package for the agents
         # ----------------------------------------------------
 
         agent_input = {
+
             "patient": sanitized_patient,
+
             "conditions": conditions,
+
             "medications": medications,
+
             "observations": observations
         }
 
 
         # ----------------------------------------------------
-        # TEMPORARY PIPELINE PLACEHOLDER
+        # Run the five-agent pipeline
         # ----------------------------------------------------
-        #
-        # The next integration step will execute root_agent
-        # with an ADK Runner/Session and pass agent_input
-        # through the five-agent SequentialAgent pipeline.
-        #
-        # We intentionally do NOT fake an AI response here.
-        #
 
-        return {
-            "cards": [
-                {
-                    "summary": "HeLaSync 5-Agent Pipeline Ready",
-                    "indicator": "info",
-                    "detail": (
-                        "Patient data successfully passed through "
-                        "the HeLaSync Privacy Gateway. The five-agent "
-                        "ADK pipeline is loaded and ready for execution."
-                    ),
-                    "source": {
-                        "label": "HeLaSync"
-                    }
-                }
-            ]
-        }
+        agent_response = await run_helasync_agents(
+            patient_data=agent_input
+        )
 
 
-    # ========================================================
-    # ERROR HANDLING
-    # ========================================================
+        # ----------------------------------------------------
+        # Parse Agent 5 CDS response
+        # ----------------------------------------------------
+
+        cds_response = parse_agent_response(
+            agent_response
+        )
+
+
+        # ----------------------------------------------------
+        # Return CDS Hooks response
+        # ----------------------------------------------------
+
+        return cds_response
+
 
     except Exception as e:
+
+        # ----------------------------------------------------
+        # Server-side logging
+        # ----------------------------------------------------
 
         print(
             "HeLaSync CDS error:",
             str(e)
         )
 
+
+        # ----------------------------------------------------
+        # Safe CDS response
+        # ----------------------------------------------------
+
         return {
+
             "cards": [
+
                 {
-                    "summary": "HeLaSync",
-                    "indicator": "warning",
+
+                    "summary":
+                        "HeLaSync",
+
+                    "indicator":
+                        "warning",
+
                     "detail": (
-                        "HeLaSync was unable to process "
-                        "the patient data."
+                        "HeLaSync was unable to complete "
+                        "the clinical trial assessment."
                     ),
+
                     "source": {
-                        "label": "HeLaSync"
+
+                        "label":
+                            "HeLaSync"
                     }
+
                 }
+
             ]
         }
-```
