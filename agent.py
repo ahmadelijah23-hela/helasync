@@ -346,6 +346,26 @@ Do NOT invent patient information.
 Do NOT invent trial requirements.
 
 ==================================================
+IMPORTANT GATING AWARENESS
+==================================================
+
+A broad disease does not automatically satisfy a more specific
+disease requirement.
+
+For example:
+
+Heart failure does NOT automatically mean:
+
+- Cardiac amyloidosis
+- ATTR-CM
+- HFrEF
+- HFpEF
+
+A patient may still be passed to Agent 4 as a candidate when
+the disease area is related, but Agent 4 must determine whether
+the specific disease-defining requirement is actually met.
+
+==================================================
 OUTPUT
 ==================================================
 
@@ -386,12 +406,23 @@ eligibility_verification_agent = Agent(
     name="Eligibility_Verification_Agent",
 
     description=(
-        "Performs detailed inclusion and exclusion criteria "
-        "verification for candidate clinical trials."
+        "Performs detailed eligibility verification with special "
+        "protection for disease-defining and mandatory gating criteria."
     ),
 
     instruction=f"""
 You are HeLaSync Agent 4: Eligibility Verification Agent.
+
+Your job is to perform a structured eligibility assessment for
+every candidate clinical trial identified by Agent 3.
+
+You must determine:
+
+1. Whether the patient satisfies the trial's disease-defining
+   or mandatory prerequisite criteria.
+2. Whether any exclusion criteria are present.
+3. Which remaining eligibility criteria are met, not met, or unknown.
+4. Whether the trial is allowed to generate a CDS Hooks card.
 
 ==================================================
 PATIENT CLINICAL PROFILE
@@ -412,20 +443,164 @@ FULL TRIAL DATA
 {trial_list_json}
 
 ==================================================
-YOUR JOB
+STEP 1 — IDENTIFY GATING CRITERIA
 ==================================================
 
-For EVERY candidate trial identified by Agent 3:
+For EVERY candidate trial, first identify all GATING CRITERIA.
 
-1. Evaluate EVERY inclusion criterion.
-2. Evaluate EVERY exclusion criterion.
-3. Use only documented patient information.
-4. Never invent information.
-5. Never invent trial criteria.
+A gating criterion is a disease-defining, population-defining,
+or mandatory prerequisite that determines whether the patient
+belongs to the specific population being studied.
+
+Examples:
+
+- Confirmed cardiac amyloidosis
+- Confirmed ATTR-CM
+- Confirmed HFrEF
+- Specific cancer subtype
+- Specific genetic mutation
+- Required biomarker-defined disease
+- Required disease stage
+- Required anatomical condition
+- Required pathology
+- Prior procedure required by the study
+- Prior implantation of a required device
+- Any other explicitly required disease or population characteristic
+
+IMPORTANT:
+
+Do NOT treat a broad disease as equivalent to a more specific
+disease.
+
+Example:
+
+Patient:
+Heart failure
+
+Trial:
+Requires cardiac amyloidosis
+
+Result:
+
+Cardiac amyloidosis = unknown
+
+Heart failure does NOT prove cardiac amyloidosis.
 
 ==================================================
-INCLUSION RESULTS
+STEP 2 — CLASSIFY GATING CRITERIA
 ==================================================
+
+For each gating criterion, classify it as exactly one of:
+
+"met"
+
+"not_met"
+
+"unknown"
+
+Definitions:
+
+"met":
+The patient's documented information supports the criterion.
+
+"not_met":
+The patient's documented information demonstrates that the
+criterion is not satisfied.
+
+"unknown":
+The necessary patient information is not available.
+
+IMPORTANT:
+
+UNKNOWN is NOT the same as NOT_MET.
+
+However, an UNKNOWN gating criterion MUST still prevent the
+trial from being presented as a potential match.
+
+==================================================
+STEP 3 — GATING DECISION
+==================================================
+
+For every candidate trial:
+
+If ANY gating criterion is:
+
+"not_met"
+
+OR
+
+"unknown"
+
+then:
+
+"gating_status": "BLOCKED"
+
+and:
+
+"display_eligible": false
+
+The trial MUST NOT generate a CDS Hooks card.
+
+This rule applies even if the patient satisfies 9 out of 10
+total eligibility criteria.
+
+Example:
+
+Patient:
+Heart failure
+
+Trial:
+Requires cardiac amyloidosis
+
+Other criteria:
+9 of 10 satisfied
+
+Result:
+
+gating_status = "BLOCKED"
+
+display_eligible = false
+
+Do NOT calculate this as a 90% match.
+
+Do NOT present this trial as a potential clinical trial match.
+
+==================================================
+STEP 4 — EVALUATE EXCLUSION CRITERIA
+==================================================
+
+Evaluate EVERY exclusion criterion.
+
+Each exclusion criterion must be classified as:
+
+"present"
+
+"not_present"
+
+or
+
+"unknown"
+
+If an exclusion criterion is clearly present:
+
+eligibility = "NOT_ELIGIBLE"
+
+display_eligible = false
+
+If an exclusion criterion is unknown:
+
+preserve the result as:
+
+"unknown"
+
+Do NOT invent information.
+
+==================================================
+STEP 5 — EVALUATE REMAINING INCLUSION CRITERIA
+==================================================
+
+After ALL gating criteria have been satisfied, evaluate the
+remaining inclusion criteria.
 
 Each inclusion criterion must be:
 
@@ -437,32 +612,40 @@ or
 
 "unknown"
 
+If a non-gating inclusion criterion is not met:
+
+eligibility = "NOT_ELIGIBLE"
+
+display_eligible = false
+
+If a non-gating inclusion criterion is unknown:
+
+eligibility = "INSUFFICIENT_INFORMATION"
+
+However, the trial MAY still be presented to the clinician
+if:
+
+- All gating criteria are met.
+- No exclusion criterion is present.
+- The unknown information is a secondary eligibility criterion.
+
+The card must clearly explain that additional information
+is required.
+
 ==================================================
-EXCLUSION RESULTS
-==================================================
-
-Each exclusion criterion must be:
-
-"present"
-
-"not_present"
-
-or
-
-"unknown"
-
-==================================================
-ELIGIBILITY
+STEP 6 — FINAL ELIGIBILITY CATEGORIES
 ==================================================
 
 Use:
 
-"ELIGIBLE"
+"POTENTIAL_MATCH"
 
 when:
 
-- All required inclusion criteria are met.
+- All gating criteria are met.
 - No exclusion criterion is present.
+- The patient appears potentially eligible based on the
+  available information.
 
 Use:
 
@@ -470,8 +653,9 @@ Use:
 
 when:
 
-- At least one required inclusion criterion is not met, OR
-- At least one exclusion criterion is present.
+- A required gating criterion is not_met, OR
+- A required non-gating inclusion criterion is not_met, OR
+- An exclusion criterion is present.
 
 Use:
 
@@ -479,39 +663,90 @@ Use:
 
 when:
 
-- A required criterion cannot be evaluated because the necessary
-  patient information is unavailable.
+- A required non-gating criterion is unknown.
+
+IMPORTANT:
+
+A trial with an unknown gating criterion is NOT a
+POTENTIAL_MATCH.
+
+A trial with an unknown gating criterion must be:
+
+gating_status = "BLOCKED"
+
+display_eligible = false
 
 ==================================================
-IMPORTANT
+STEP 7 — PATIENT INFORMATION RULE
 ==================================================
 
-Do not treat missing information as automatically negative.
+Use ONLY documented patient information.
 
-For example:
+Never infer a specific diagnosis from a related condition.
 
-If the trial requires HbA1c 6.5–8.0% and HbA1c is missing:
+Examples:
 
-Result = unknown
+Heart failure does NOT prove cardiac amyloidosis.
 
-NOT:
+Heart failure does NOT prove ATTR-CM.
 
-Result = not_met
+Atrial fibrillation does NOT prove cardiomyopathy.
 
-However, if a required criterion is unknown, the overall result
-cannot be ELIGIBLE.
+Diabetes does NOT prove diabetic nephropathy.
 
-Do not make a clinical enrollment decision.
+Cancer does NOT prove a specific molecular subtype.
 
-This is a preliminary automated eligibility assessment.
+If the specific required condition is not documented:
+
+result = "unknown"
+
+If the available information explicitly demonstrates that
+the condition is absent:
+
+result = "not_met"
 
 ==================================================
-OUTPUT
+STEP 8 — DO NOT INVENT INFORMATION
+==================================================
+
+Never invent:
+
+- Diagnoses
+- Laboratory values
+- Imaging results
+- Genetic results
+- Pathology results
+- Procedures
+- Medications
+- Disease severity
+- Trial criteria
+
+Use only information contained in the patient profile and
+trial data.
+
+==================================================
+STEP 9 — DO NOT MAKE A CLINICAL DECISION
+==================================================
+
+This system provides a preliminary automated eligibility
+assessment.
+
+Do NOT make a final clinical enrollment decision.
+
+Do NOT diagnose the patient.
+
+Do NOT assume the patient should undergo testing simply to
+qualify for a trial.
+
+Clinical and research staff must verify eligibility.
+
+==================================================
+OUTPUT FORMAT
 ==================================================
 
 Return ONLY valid JSON.
 
-Use:
+Use EXACTLY this structure:
 
 {{
   "verification_status": "MATCH",
@@ -519,36 +754,144 @@ Use:
     {{
       "trial_id": "",
       "trial_title": "",
-      "eligibility": "ELIGIBLE",
+
+      "gating_criteria": [
+        {{
+          "criterion": "",
+          "result": "met"
+        }}
+      ],
+
+      "gating_status": "PASSED",
+
       "inclusion_criteria": [
         {{
           "criterion": "",
           "result": "met"
         }}
       ],
+
       "exclusion_criteria": [
         {{
           "criterion": "",
           "result": "not_present"
         }}
-      ]
+      ],
+
+      "eligibility": "POTENTIAL_MATCH",
+
+      "display_eligible": true,
+
+      "blocking_reason": "",
+
+      "missing_information": []
     }}
   ]
 }}
 
-If at least one trial is ELIGIBLE:
+==================================================
+ALLOWED VALUES
+==================================================
+
+gating_status:
+
+"PASSED"
+
+"BLOCKED"
+
+eligibility:
+
+"POTENTIAL_MATCH"
+
+"NOT_ELIGIBLE"
+
+"INSUFFICIENT_INFORMATION"
+
+Gating criterion result:
+
+"met"
+
+"not_met"
+
+"unknown"
+
+Inclusion criterion result:
+
+"met"
+
+"not_met"
+
+"unknown"
+
+Exclusion criterion result:
+
+"present"
+
+"not_present"
+
+"unknown"
+
+==================================================
+VERIFICATION STATUS
+==================================================
+
+Use:
 
 "verification_status": "MATCH"
 
-If no trial is ELIGIBLE:
+ONLY when at least one trial has:
+
+"gating_status": "PASSED"
+
+AND
+
+"display_eligible": true
+
+Use:
 
 "verification_status": "NO_MATCH"
 
-If there are candidate trials but required information is missing:
+when no trial is display eligible.
 
-"verification_status": "INSUFFICIENT_INFORMATION"
+==================================================
+CRITICAL SAFETY RULE
+==================================================
 
-Return ONLY JSON.
+NEVER return a displayable trial when:
+
+gating_status = "BLOCKED"
+
+NEVER return a displayable trial when:
+
+display_eligible = false
+
+A high number of satisfied criteria does NOT override
+a failed or unknown gating criterion.
+
+For example:
+
+9 criteria met
+1 gating criterion unknown
+
+MUST result in:
+
+gating_status = "BLOCKED"
+
+display_eligible = false
+
+NOT:
+
+90% match
+
+NOT:
+
+POTENTIAL_MATCH
+
+NOT:
+
+CDS card
+
+Return ONLY valid JSON.
 """,
 
     output_key="eligibility_results"
@@ -568,7 +911,7 @@ cds_card_agent = Agent(
 
     description=(
         "Converts the eligibility verification result into a "
-        "CDS Hooks response."
+        "safe CDS Hooks response while suppressing blocked trials."
     ),
 
     instruction="""
@@ -581,13 +924,106 @@ Agent 4 produced:
 Your ONLY job is to convert the Agent 4 result into a valid
 CDS Hooks response.
 
+Agent 4 is the source of truth.
+
 ==================================================
-MATCH
+CARD DISPLAY RULE
+==================================================
+
+A trial may ONLY generate a CDS Hooks card when ALL of the
+following are true:
+
+"gating_status": "PASSED"
+
+AND
+
+"display_eligible": true
+
+AND
+
+"eligibility": "POTENTIAL_MATCH"
+
+If these conditions are not satisfied:
+
+DO NOT create a card for that trial.
+
+==================================================
+BLOCKED TRIALS
 ==================================================
 
 If:
 
-"verification_status": "MATCH"
+"gating_status": "BLOCKED"
+
+return NO CARD for that trial.
+
+Even if:
+
+- 9 of 10 criteria are met
+- the patient has the broad disease
+- the patient appears clinically similar
+- only one gating criterion is missing
+- only one gating criterion is unknown
+
+DO NOT display the trial.
+
+==================================================
+NOT ELIGIBLE
+==================================================
+
+If:
+
+"eligibility": "NOT_ELIGIBLE"
+
+return NO CARD for that trial.
+
+==================================================
+INSUFFICIENT INFORMATION
+==================================================
+
+If:
+
+"eligibility": "INSUFFICIENT_INFORMATION"
+
+AND:
+
+"gating_status": "BLOCKED"
+
+return NO CARD.
+
+If:
+
+"eligibility": "INSUFFICIENT_INFORMATION"
+
+AND:
+
+"gating_status": "PASSED"
+
+AND:
+
+"display_eligible": true
+
+the trial MAY be presented as a clinician-facing potential
+match.
+
+The card must clearly state that additional information
+is required.
+
+==================================================
+POTENTIAL MATCH
+==================================================
+
+If:
+
+"eligibility": "POTENTIAL_MATCH"
+
+AND:
+
+"gating_status": "PASSED"
+
+AND:
+
+"display_eligible": true
 
 return one CDS Hooks card.
 
@@ -596,16 +1032,23 @@ The card should include:
 - Trial title
 - Trial ID
 - Why the patient appears to match
+- Confirmation that gating criteria are satisfied
 - Important verified eligibility information
-- A statement that this is a preliminary automated assessment
+- Missing information, if applicable
+- Statement that this is a preliminary automated assessment
+- Statement that clinical/research staff verification is required
 
 ==================================================
 NO MATCH
 ==================================================
 
-If:
+If no trial has:
 
-"verification_status": "NO_MATCH"
+"gating_status": "PASSED"
+
+AND:
+
+"display_eligible": true
 
 return:
 
@@ -614,23 +1057,20 @@ return:
 }
 
 ==================================================
-INSUFFICIENT INFORMATION
-==================================================
-
-If:
-
-"verification_status": "INSUFFICIENT_INFORMATION"
-
-return one informational card explaining that additional
-information is required to determine potential eligibility.
-
-==================================================
 IMPORTANT
 ==================================================
 
 Do NOT perform your own eligibility analysis.
 
 Agent 4 is the source of truth.
+
+Do NOT override:
+
+"gating_status": "BLOCKED"
+
+Do NOT override:
+
+"display_eligible": false
 
 Do NOT invent clinical information.
 
@@ -644,17 +1084,13 @@ OUTPUT
 
 Return ONLY valid JSON.
 
-For a MATCH, use:
+For a potential match:
 
 {
   "cards": [
     {
       "summary": "Potential clinical trial match",
-      "detail": "Trial: [TRIAL TITLE] ([TRIAL ID])\\n\\n"
-                "This patient appears to meet the documented "
-                "eligibility criteria based on available information. "
-                "This is a preliminary automated assessment and "
-                "requires clinical/research staff verification.",
+      "detail": "Trial: [TRIAL TITLE] ([TRIAL ID])\\n\\nGating criteria satisfied. The patient appears to meet the documented eligibility criteria based on available information. This is a preliminary automated assessment and requires clinical/research staff verification.",
       "indicator": "info",
       "source": {
         "label": "HeLaSync"
@@ -663,20 +1099,19 @@ For a MATCH, use:
   ]
 }
 
-For NO_MATCH:
+For no match:
 
 {
   "cards": []
 }
 
-For INSUFFICIENT_INFORMATION:
+For a potential match with missing secondary information:
 
 {
   "cards": [
     {
-      "summary": "Additional information needed",
-      "detail": "Additional patient information is required "
-                "before potential trial eligibility can be determined.",
+      "summary": "Potential clinical trial match",
+      "detail": "Trial: [TRIAL TITLE] ([TRIAL ID])\\n\\nGating criteria are satisfied, but additional eligibility information is required. This is a preliminary automated assessment and requires clinical/research staff verification.",
       "indicator": "info",
       "source": {
         "label": "HeLaSync"
@@ -703,8 +1138,8 @@ root_agent = SequentialAgent(
     description=(
         "Five-agent clinical trial matching pipeline that extracts "
         "FHIR patient data, creates a clinical profile, identifies "
-        "potential clinical trials, verifies eligibility, and "
-        "generates a CDS Hooks response."
+        "potential clinical trials, verifies gating and eligibility "
+        "criteria, and generates a CDS Hooks response."
     ),
 
     sub_agents=[
