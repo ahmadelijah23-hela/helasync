@@ -1,14 +1,17 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+```python
+import os
 from typing import Dict, Any
 
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+
 from privacy.gateway import PrivacyGateway
-from agents.patient_profile_agent import patient_profile_agent
+from agent import root_agent
 
 
-# ==================================================
+# ============================================================
 # FASTAPI APPLICATION
-# ==================================================
+# ============================================================
 
 app = FastAPI(
     title="HeLaSync API",
@@ -17,9 +20,9 @@ app = FastAPI(
 )
 
 
-# ==================================================
+# ============================================================
 # CORS
-# ==================================================
+# ============================================================
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,29 +32,50 @@ app.add_middleware(
 )
 
 
-# ==================================================
+# ============================================================
 # PRIVACY GATEWAY
-# ==================================================
+# ============================================================
 
 privacy_gateway = PrivacyGateway()
 
 
-# ==================================================
+# ============================================================
 # HEALTH CHECK
-# ==================================================
+# ============================================================
 
 @app.get("/")
 def home():
 
     return {
         "message": "HeLaSync API is running",
-        "status": "healthy"
+        "status": "healthy",
+        "agent_pipeline": "5-agent pipeline loaded"
     }
 
 
-# ==================================================
-# PRIVACY GATEWAY TEST ENDPOINT
-# ==================================================
+# ============================================================
+# AGENT STATUS
+# ============================================================
+
+@app.get("/agent-status")
+def agent_status():
+
+    return {
+        "status": "ready",
+        "pipeline": "HeLaSync_Pipeline",
+        "agents": [
+            "Patient_Data_Agent",
+            "Clinical_Profile_Agent",
+            "Trial_Matching_Agent",
+            "Eligibility_Verification_Agent",
+            "CDS_Card_Agent"
+        ]
+    }
+
+
+# ============================================================
+# PRIVACY GATEWAY TEST
+# ============================================================
 
 @app.post("/privacy/process-patient")
 def process_patient(
@@ -60,10 +84,8 @@ def process_patient(
 
     try:
 
-        sanitized_patient = (
-            privacy_gateway.process_patient(
-                patient=patient
-            )
+        sanitized_patient = privacy_gateway.process_patient(
+            patient=patient
         )
 
         return {
@@ -79,9 +101,9 @@ def process_patient(
         )
 
 
-# ==================================================
+# ============================================================
 # CDS HOOKS SERVICE DISCOVERY
-# ==================================================
+# ============================================================
 
 @app.get("/cds-services")
 def cds_services():
@@ -90,15 +112,12 @@ def cds_services():
         "services": [
             {
                 "hook": "patient-view",
-
                 "title": "HeLaSync",
-
                 "description": (
                     "HeLaSync identifies potential "
                     "clinical trial opportunities "
                     "during routine patient care."
                 ),
-
                 "id": "helasync",
 
                 "prefetch": {
@@ -120,20 +139,20 @@ def cds_services():
     }
 
 
-# ==================================================
+# ============================================================
 # HELASYNC CDS HOOK
-# ==================================================
+# ============================================================
 
 @app.post("/cds-services/helasync")
-def helasync(
+async def helasync(
     request: Dict[str, Any]
 ):
 
     try:
 
-        # ------------------------------------------
+        # ----------------------------------------------------
         # GET CDS HOOKS PREFETCH DATA
-        # ------------------------------------------
+        # ----------------------------------------------------
 
         prefetch = request.get(
             "prefetch",
@@ -141,18 +160,18 @@ def helasync(
         )
 
 
-        # ------------------------------------------
+        # ----------------------------------------------------
         # PATIENT
-        # ------------------------------------------
+        # ----------------------------------------------------
 
         patient = prefetch.get(
             "patient"
         )
 
 
-        # ------------------------------------------
+        # ----------------------------------------------------
         # CONDITIONS
-        # ------------------------------------------
+        # ----------------------------------------------------
 
         conditions = prefetch.get(
             "conditions",
@@ -160,9 +179,9 @@ def helasync(
         )
 
 
-        # ------------------------------------------
+        # ----------------------------------------------------
         # MEDICATIONS
-        # ------------------------------------------
+        # ----------------------------------------------------
 
         medications = prefetch.get(
             "medications",
@@ -170,9 +189,9 @@ def helasync(
         )
 
 
-        # ------------------------------------------
+        # ----------------------------------------------------
         # OBSERVATIONS
-        # ------------------------------------------
+        # ----------------------------------------------------
 
         observations = prefetch.get(
             "observations",
@@ -180,9 +199,9 @@ def helasync(
         )
 
 
-        # ------------------------------------------
+        # ----------------------------------------------------
         # CHECK FOR PATIENT
-        # ------------------------------------------
+        # ----------------------------------------------------
 
         if not patient:
 
@@ -199,104 +218,86 @@ def helasync(
                         ),
 
                         "source": {
-                            "label": "HeLaSync",
-                            "url": "/launch?trial=hls-htn-001&reasons=Systolic%20BP%20above%20target|Hypertension%20on%20problem%20list"
+                            "label": "HeLaSync"
                         }
                     }
                 ]
             }
 
 
-        # ------------------------------------------
+        # ----------------------------------------------------
         # SEND DATA THROUGH PRIVACY GATEWAY
-        # ------------------------------------------
+        # ----------------------------------------------------
 
-        sanitized_patient = (
-            privacy_gateway.process_patient(
+        sanitized_patient = privacy_gateway.process_patient(
 
-                patient=patient,
+            patient=patient,
 
-                conditions=conditions,
+            conditions=conditions,
 
-                medications=medications,
+            medications=medications,
 
-                observations=observations
-            )
+            observations=observations
         )
 
 
-        # ------------------------------------------
-        # TEMPORARY DEVELOPMENT LOG
-        # ------------------------------------------
+        # ----------------------------------------------------
+        # DEVELOPMENT LOG
+        # ----------------------------------------------------
         #
         # IMPORTANT:
-        # This is for development/testing only.
-        # Do NOT log patient data in production.
+        # Do not log patient data in production.
         #
 
         print(
-            "Sanitized patient profile:",
-            sanitized_patient
+            "HeLaSync received CDS request."
         )
 
 
-        # ------------------------------------------
-        # CURRENT CDS CARD
-        # ------------------------------------------
+        # ----------------------------------------------------
+        # PREPARE DATA FOR THE 5-AGENT PIPELINE
+        # ----------------------------------------------------
+
+        agent_input = {
+            "patient": sanitized_patient,
+            "conditions": conditions,
+            "medications": medications,
+            "observations": observations
+        }
+
+
+        # ----------------------------------------------------
+        # TEMPORARY PIPELINE PLACEHOLDER
+        # ----------------------------------------------------
+        #
+        # The next integration step will execute root_agent
+        # with an ADK Runner/Session and pass agent_input
+        # through the five-agent SequentialAgent pipeline.
+        #
+        # We intentionally do NOT fake an AI response here.
+        #
 
         return {
-
             "cards": [
-
                 {
-
-                    "summary":
-                        "Potential Trial Match",
-
-                    "indicator":
-                        "info",
-
+                    "summary": "HeLaSync 5-Agent Pipeline Ready",
+                    "indicator": "info",
                     "detail": (
-                        "HeLaSync processed the patient's "
-                        "clinical information through the "
-                        "Privacy Gateway. This patient may "
-                        "be potentially eligible for a "
-                        "clinical trial."
+                        "Patient data successfully passed through "
+                        "the HeLaSync Privacy Gateway. The five-agent "
+                        "ADK pipeline is loaded and ready for execution."
                     ),
-
                     "source": {
-
-                        "label":
-                            "HeLaSync",
-
-                        "url":
-                            "/launch?trial=hls-htn-001&reasons=Systolic%20BP%20above%20target|Hypertension%20on%20problem%20list"
-                    },
-
-                    "links": [
-
-                        {
-
-                            "label":
-                                "View Clinical Trial",
-
-                            "url":
-                                "/launch?trial=hls-htn-001&reasons=Systolic%20BP%20above%20target|Hypertension%20on%20problem%20list",
-
-                            "type":
-                                "absolute"
-                        }
-
-                    ]
+                        "label": "HeLaSync"
+                    }
                 }
-
             ]
         }
 
 
-    # ==================================================
+    # ========================================================
     # ERROR HANDLING
-    # ==================================================
+    # ========================================================
 
     except Exception as e:
 
@@ -306,32 +307,18 @@ def helasync(
         )
 
         return {
-
             "cards": [
-
                 {
-
-                    "summary":
-                        "HeLaSync",
-
-                    "indicator":
-                        "warning",
-
+                    "summary": "HeLaSync",
+                    "indicator": "warning",
                     "detail": (
                         "HeLaSync was unable to process "
                         "the patient data."
                     ),
-
                     "source": {
-
-                        "label":
-                            "HeLaSync",
-
-                        "url":
-                            "/launch?trial=hls-htn-001&reasons=Systolic%20BP%20above%20target|Hypertension%20on%20problem%20list"
+                        "label": "HeLaSync"
                     }
-
                 }
-
             ]
         }
+```
