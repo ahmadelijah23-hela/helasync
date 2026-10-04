@@ -1,0 +1,28 @@
+{
+  "protocolSection": {
+    "identificationModule": {
+      "nctId": "NCTFAKE003",
+      "briefTitle": "HeLaSync Heart Failure Treatment Study"
+    },
+    "statusModule": {
+      "overallStatus": "RECRUITING"
+    },
+    "conditionsModule": {
+      "conditions": [
+        "Heart Failure"
+      ]
+    },
+    "designModule": {
+      "studyType": "INTERVENTIONAL",
+      "phases": [
+        "PHASE2"
+      ]
+    },
+    "eligibilityModule": {
+      "eligibilityCriteria": "Inclusion Criteria:\n1. Age 18 or older.\n2. Diagnosis of Heart Failure.\n3. NT-proBNP above 300 pg/mL.\n\nExclusion Criteria:\n1. Pregnancy.\n2. eGFR below 30 mL/min/1.73 m2.",
+      "healthyVolunteers": false,
+      "sex": "ALL",
+      "minimumAge": "18 Years"
+    }
+  }
+}
