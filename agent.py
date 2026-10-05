@@ -1,42 +1,88 @@
 import json
 from pathlib import Path
 
-from google.adk.agents import LlmAgent, SequentialAgent
+from google.adk.agents import Agent, SequentialAgent
 
 
 # ============================================================
-# HElaSYNC TRIAL DATA
+# LOAD CLINICAL TRIALS
 # ============================================================
-
-TRIAL_DIR = Path(__file__).parent / "Trial_List"
-
 
 def load_trials():
     """
-    Load all clinical trial JSON files from Trial_List.
+    Load all clinical trial JSON files from the Trial_List directory.
     """
+
+    trial_folder = Path(__file__).parent / "Trial_List"
+
+    if not trial_folder.exists():
+        raise FileNotFoundError(
+            f"Trial_List folder was not found: {trial_folder}"
+        )
+
     trials = []
 
-    if not TRIAL_DIR.exists():
-        print(f"Trial directory not found: {TRIAL_DIR}")
-        return trials
+    for trial_file in sorted(trial_folder.iterdir()):
 
-    for file_path in sorted(TRIAL_DIR.glob("*.json")):
+        # Ignore hidden files
+        if trial_file.name.startswith("."):
+            continue
+
+        # Ignore folders
+        if not trial_file.is_file():
+            continue
+
+        # Only process JSON files
+        if trial_file.suffix.lower() != ".json":
+            continue
+
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                trial = json.load(f)
-                trials.append(trial)
-        except Exception as e:
-            print(f"Error loading {file_path}: {e}")
 
-    print(f"Loaded {len(trials)} clinical trial files.")
+            with open(
+                trial_file,
+                "r",
+                encoding="utf-8"
+            ) as file:
+
+                trial_data = json.load(file)
+
+            trials.append(trial_data)
+
+        except json.JSONDecodeError as e:
+
+            print(
+                f"WARNING: Could not parse "
+                f"{trial_file.name}: {e}"
+            )
+
+        except Exception as e:
+
+            print(
+                f"WARNING: Could not read "
+                f"{trial_file.name}: {e}"
+            )
+
+    if not trials:
+
+        raise ValueError(
+            "No valid clinical trial JSON files "
+            "were found in Trial_List."
+        )
+
+    print(
+        f"Loaded {len(trials)} clinical trial files."
+    )
+
     return trials
 
 
-TRIALS = load_trials()
+# Load trials when application starts
+trial_list = load_trials()
 
-TRIAL_LIST_JSON = json.dumps(
-    TRIALS,
+
+# Convert trials to readable JSON for agents
+trial_list_json = json.dumps(
+    trial_list,
     indent=2
 )
 
@@ -46,64 +92,93 @@ TRIAL_LIST_JSON = json.dumps(
 # PATIENT DATA AGENT
 # ============================================================
 
-PATIENT_DATA_INSTRUCTION = """
-You are the HeLaSync Patient Data Agent.
+patient_data_agent = Agent(
 
-Your job is to extract and organize clinically relevant patient
-information from the FHIR patient context provided to the system.
+    model="gemini-3.6-flash",
 
-Focus on information relevant to clinical trial eligibility, including:
+    name="Patient_Data_Agent",
 
-- Patient age
-- Sex
-- Conditions
-- Diagnoses
-- Laboratory values
-- Observations
-- Medications if available
-- Relevant clinical measurements
-- Pregnancy status if available
-- Kidney function / eGFR if available
-- Cardiac biomarkers such as NT-proBNP if available
-- Other trial-relevant information
+    description=(
+        "Extracts and structures patient demographics, "
+        "conditions, medications, procedures, laboratory "
+        "results, imaging, and medical history from FHIR data."
+    ),
 
-Do not invent information.
+    instruction="""
+You are HeLaSync Agent 1: Patient Data Agent.
 
-If information is not available, mark it as UNKNOWN.
+Your ONLY job is to extract and structure information
+from the provided FHIR Bundle.
 
-IMPORTANT:
+Do NOT determine clinical trial eligibility.
 
-UNKNOWN does not mean the patient does not have the condition.
+Do NOT recommend clinical trials.
 
-UNKNOWN means the information is not documented in the available
-patient record.
+Do NOT invent missing information.
 
-Return a structured JSON object.
+Do NOT make clinical decisions.
 
-Use this general structure:
+==================================================
+EXTRACT
+==================================================
+
+Extract:
+
+1. Patient ID
+2. Date of birth
+3. Age
+4. Sex
+5. Gender
+6. Active conditions
+7. Historical conditions
+8. Medications
+9. Procedures
+10. Laboratory results
+11. Imaging
+12. Allergies
+13. Relevant medical history
+
+Calculate age from birthDate when possible.
+
+Preserve actual documented values and units.
+
+If information is missing, mark it as unknown.
+
+Never assume missing information means the patient
+does not have a condition.
+
+==================================================
+OUTPUT
+==================================================
+
+Return ONLY valid JSON.
+
+Use this structure:
 
 {
   "patient": {
-    "id": "...",
-    "age": "...",
-    "sex": "..."
+    "id": "",
+    "birthDate": "",
+    "age": null,
+    "sex": "",
+    "gender": ""
   },
   "conditions": [],
-  "observations": [],
   "medications": [],
-  "clinical_facts": [],
-  "unknown_information": []
+  "procedures": [],
+  "labs": [],
+  "imaging": [],
+  "relevant_history": {
+    "allergies": [],
+    "family_history": [],
+    "surgical_history": [],
+    "other": []
+  },
+  "data_gaps": []
 }
+""",
 
-Return valid JSON only.
-"""
-
-
-patient_data_agent = LlmAgent(
-    name="Patient_Data_Agent",
-    model="gemini-3.6-flash",
-    instruction=PATIENT_DATA_INSTRUCTION,
-    output_key="patient_data",
+    output_key="patient_data"
 )
 
 
@@ -112,66 +187,96 @@ patient_data_agent = LlmAgent(
 # CLINICAL PROFILE AGENT
 # ============================================================
 
-CLINICAL_PROFILE_INSTRUCTION = """
-You are the HeLaSync Clinical Profile Agent.
+clinical_profile_agent = Agent(
 
-Your job is to convert the patient data into a concise clinical
-profile that can be evaluated against clinical trial eligibility
-criteria.
+    model="gemini-3.6-flash",
 
-Review the output from the Patient Data Agent.
+    name="Clinical_Profile_Agent",
 
-Identify:
+    description=(
+        "Creates a concise clinical profile from the "
+        "structured patient data for clinical trial matching."
+    ),
 
-- Confirmed diagnoses
-- Confirmed clinical conditions
-- Relevant laboratory values
-- Relevant observations
-- Relevant demographic information
-- Relevant exclusions
-- Missing information
-- Unknown information
+    instruction="""
+You are HeLaSync Agent 2: Clinical Profile Agent.
 
-IMPORTANT SAFETY RULES:
+Agent 1 has extracted the patient's FHIR information.
 
-Do not diagnose the patient.
+Agent 1 output:
 
-Do not infer a diagnosis simply because a laboratory value is abnormal.
+{patient_data}
 
-Do not assume that an undocumented condition is absent.
+Your job is to create a concise clinical profile
+that highlights information relevant to clinical
+trial matching.
 
-Do not convert UNKNOWN into NOT_MET.
+==================================================
+IMPORTANT
+==================================================
+
+Use ONLY information provided by Agent 1.
+
+Do NOT invent information.
+
+Do NOT determine clinical trial eligibility.
+
+Do NOT recommend a trial.
+
+Do NOT assume missing information.
+
+==================================================
+PROFILE
+==================================================
+
+Summarize:
+
+- Patient demographics
+- Age
+- Sex
+- Active conditions
+- Relevant historical conditions
+- Important medications
+- Important laboratory values
+- Relevant procedures
+- Relevant medical history
+- Important data gaps
+
+Highlight objective values such as:
+
+- HbA1c
+- eGFR
+- Blood pressure
+- BMI
+- Laboratory results
+- Disease severity
+
+ONLY when actually documented.
+
+==================================================
+OUTPUT
+==================================================
+
+Return ONLY valid JSON.
 
 Use:
 
-MET
-NOT_MET
-UNKNOWN
-
-when evaluating whether a clinical fact is supported.
-
-Return valid JSON only.
-
-Use this general structure:
-
 {
   "clinical_profile": {
-    "demographics": {},
-    "confirmed_conditions": [],
-    "relevant_observations": [],
-    "relevant_labs": [],
-    "known_exclusions": [],
-    "unknown_information": []
+    "patient_id": "",
+    "age": null,
+    "sex": "",
+    "conditions": [],
+    "medications": [],
+    "labs": [],
+    "procedures": [],
+    "relevant_history": [],
+    "data_gaps": []
   }
 }
-"""
+""",
 
-
-clinical_profile_agent = LlmAgent(
-    name="Clinical_Profile_Agent",
-    model="gemini-3.6-flash",
-    instruction=CLINICAL_PROFILE_INSTRUCTION,
-    output_key="clinical_profile",
+    output_key="clinical_profile"
 )
 
 
@@ -181,133 +286,112 @@ clinical_profile_agent = LlmAgent(
 # ============================================================
 
 TRIAL_MATCHING_INSTRUCTION = """
-You are the HeLaSync Trial Matching Agent.
+You are HeLaSync Agent 3: Clinical Trial Matching Agent.
 
-Your job is to compare the patient's clinical profile against the
-available clinical trials.
-
-The available clinical trials are provided below.
-
-IMPORTANT:
-
-Do not make a final eligibility determination.
-
-Your job is to identify potentially relevant trials and evaluate
-their inclusion and exclusion criteria against the available
-patient information.
-
-For every criterion classify it as:
-
-MET
-NOT_MET
-UNKNOWN
-
-Definitions:
-
-MET:
-The patient's available record supports the criterion.
-
-NOT_MET:
-The patient's available record clearly contradicts the criterion.
-
-UNKNOWN:
-The available record does not contain enough information to determine
-whether the criterion is satisfied.
-
-CRITICAL SAFETY RULE:
-
-Do not assume an undocumented condition is absent.
-
-Do not assume an undocumented laboratory value is normal.
-
-Do not assume a patient is eligible simply because many criteria are
-satisfied.
-
-Pay particular attention to CORE/GATING criteria.
-
-A gating criterion is a defining characteristic of the disease or
-population required by the study.
-
-Examples:
-
-- Confirmed cardiac amyloidosis
-- Confirmed heart failure
-- Confirmed Type 2 diabetes
-
-If a core/gating criterion is NOT_MET or UNKNOWN, the patient must
-NOT be treated as a Potential Match for that trial.
-
-A trial should only move forward as a Potential Match when all
-required gating criteria are MET.
-
-Secondary criteria may remain UNKNOWN and can be identified for
-further clinical/research verification.
-
-Do not use numeric match percentages.
-
-Do not say things such as:
-
-"90% eligible"
-
-"8/10 match"
-
-"87% match"
-
-Instead, describe the actual criteria that are confirmed,
-not met, or unknown.
-
-AVAILABLE CLINICAL TRIALS:
-
-""" + TRIAL_LIST_JSON + """
-
-PATIENT CLINICAL PROFILE:
+The Clinical Profile Agent produced:
 
 {clinical_profile}
 
-Return valid JSON only.
+The available clinical trials are:
 
-Use this structure:
+""" + trial_list_json + """
+
+==================================================
+YOUR JOB
+==================================================
+
+Evaluate EVERY active clinical trial.
+
+Identify trials where the patient's documented
+clinical profile appears clinically aligned with
+the trial's disease area and basic requirements.
+
+This is a CANDIDATE MATCHING step.
+
+Agent 4 will perform detailed eligibility verification.
+
+==================================================
+ACTIVE TRIALS
+==================================================
+
+Consider trials with statuses such as:
+
+RECRUITING
+ENROLLING_BY_INVITATION
+NOT_YET_RECRUITING
+ACTIVE_NOT_RECRUITING
+
+Do NOT select:
+
+COMPLETED
+TERMINATED
+SUSPENDED
+WITHDRAWN
+
+==================================================
+RULES
+==================================================
+
+Consider:
+
+1. Disease/condition alignment
+2. Age requirements when obvious
+3. Sex requirements when obvious
+4. Obvious clinical conflicts
+5. Clearly documented exclusion criteria
+
+Do NOT reject a potentially relevant trial solely because
+information is missing.
+
+Missing information should be passed to Agent 4.
+
+Do NOT perform final eligibility verification.
+
+Do NOT invent patient information.
+
+Do NOT invent trial requirements.
+
+==================================================
+OUTPUT
+==================================================
+
+Return ONLY valid JSON.
+
+Use:
 
 {
-  "trial_matches": [
+  "candidate_trials": [
     {
-      "trial_id": "...",
-      "trial_name": "...",
-      "status": "POTENTIAL_MATCH | NOT_ELIGIBLE | INSUFFICIENT_INFORMATION | BLOCKED",
-      "gating_criteria": [
-        {
-          "criterion": "...",
-          "status": "MET | NOT_MET | UNKNOWN",
-          "evidence": "..."
-        }
-      ],
-      "secondary_criteria": [
-        {
-          "criterion": "...",
-          "status": "MET | NOT_MET | UNKNOWN",
-          "evidence": "..."
-        }
-      ],
-      "exclusion_criteria": [
-        {
-          "criterion": "...",
-          "status": "MET | NOT_MET | UNKNOWN",
-          "evidence": "..."
-        }
-      ],
-      "missing_information": [],
-      "explanation": "..."
+      "trial_id": "",
+      "trial_title": "",
+      "reason": ""
     }
   ]
+}
+
+If no potential candidates exist:
+
+{
+  "candidate_trials": []
 }
 """
 
 
-trial_matching_agent = LlmAgent(
-    name="Trial_Matching_Agent",
+trial_matching_agent = Agent(
+
     model="gemini-3.6-flash",
+
+    name="Trial_Matching_Agent",
+
+    description=(
+        "Compares the patient's clinical profile against "
+        "active clinical trials and identifies potential "
+        "trial candidates."
+    ),
+
     instruction=TRIAL_MATCHING_INSTRUCTION,
-    output_key="trial_matches",
+
+    output_key="trial_matches"
 )
 
 
@@ -317,135 +401,213 @@ trial_matching_agent = LlmAgent(
 # ============================================================
 
 ELIGIBILITY_VERIFICATION_INSTRUCTION = """
-You are the HeLaSync Eligibility Verification Agent.
+You are HeLaSync Agent 4: Eligibility Verification Agent.
 
-Your job is to independently verify the trial matches generated by
-the Trial Matching Agent.
+==================================================
+PATIENT CLINICAL PROFILE
+==================================================
 
-Review:
+{clinical_profile}
 
-1. Patient clinical profile
-2. Trial matching results
-3. Original trial criteria
+==================================================
+CANDIDATE TRIALS
+==================================================
 
-Your job is to enforce safety rules before a trial can be presented
-to a clinician.
+{trial_matches}
 
-IMPORTANT:
+==================================================
+FULL TRIAL DATA
+==================================================
 
-Never diagnose a patient.
+""" + trial_list_json + """
 
-Never invent missing information.
+==================================================
+YOUR JOB
+==================================================
 
-Never treat UNKNOWN as MET.
+For EVERY candidate trial identified by Agent 3:
 
-Never treat UNKNOWN as NOT_MET.
+1. Evaluate EVERY inclusion criterion.
+2. Evaluate EVERY exclusion criterion.
+3. Use only documented patient information.
+4. Never invent information.
+5. Never invent trial criteria.
 
-Use the following statuses:
+==================================================
+INCLUSION RESULTS
+==================================================
 
-BLOCKED
-NOT_ELIGIBLE
-POTENTIAL_MATCH
-INSUFFICIENT_INFORMATION
+Each inclusion criterion must be:
 
-RULE 1 — GATING CRITERIA
+"met"
 
-Every required core/gating criterion must be MET.
+"not_met"
 
-If a gating criterion is:
+or
 
-NOT_MET
+"unknown"
 
-then the trial is:
+==================================================
+EXCLUSION RESULTS
+==================================================
 
-NOT_ELIGIBLE
+Each exclusion criterion must be:
 
-If a gating criterion is:
+"present"
 
-UNKNOWN
+"not_present"
 
-then the trial is:
+or
 
-BLOCKED or INSUFFICIENT_INFORMATION
+"unknown"
 
-and must NOT be presented as a Potential Match.
+==================================================
+GATING CRITERIA
+==================================================
 
-RULE 2 — EXCLUSION CRITERIA
+Core disease-defining criteria are GATING criteria.
 
-If a known exclusion criterion is present, the trial is:
+Examples:
 
-NOT_ELIGIBLE
+- Confirmed disease diagnosis
+- Required disease subtype
+- Required disease state
+- Required diagnostic confirmation
 
-If an exclusion criterion cannot be determined and is important to
-safety, identify it as UNKNOWN and do not imply definitive eligibility.
+A gating criterion that is:
 
-RULE 3 — SECONDARY CRITERIA
+"not_met"
 
-If all gating criteria are MET and there is no known disqualifying
-exclusion, the trial may be classified as:
+means the patient is NOT_ELIGIBLE.
 
-POTENTIAL_MATCH
+A gating criterion that is:
 
-even if some secondary information remains UNKNOWN.
+"unknown"
 
-However, clearly identify the missing information.
+means eligibility is INSUFFICIENT_INFORMATION.
 
-RULE 4 — NO PERCENTAGE ELIGIBILITY
+Do NOT treat a high number of satisfied criteria
+as sufficient if a required gating criterion is missing.
 
-Never produce:
+==================================================
+ELIGIBILITY
+==================================================
 
-90% eligible
+Use:
 
-87% match
+"ELIGIBLE"
 
-7/8 criteria
+ONLY when:
 
-or any other numeric eligibility score.
+- All required inclusion criteria are met.
+- No exclusion criterion is present.
+- All required gating criteria are met.
 
-RULE 5 — DO NOT RECOMMEND TESTING SOLELY TO MAKE A PATIENT ELIGIBLE
+Use:
 
-If information is missing, identify what is unknown.
+"NOT_ELIGIBLE"
 
-Do not instruct the clinician to order a test simply to make the
-patient eligible for a trial.
+when:
 
-The clinician and research team must determine what evaluation is
-clinically appropriate.
+- At least one required inclusion criterion is not met, OR
+- At least one exclusion criterion is present, OR
+- A required gating criterion is not met.
 
-Return valid JSON only.
+Use:
 
-Use this structure:
+"INSUFFICIENT_INFORMATION"
+
+when:
+
+- A required criterion cannot be evaluated because
+  necessary patient information is unavailable, OR
+- A required gating criterion is unknown.
+
+==================================================
+IMPORTANT
+==================================================
+
+Do not treat missing information as automatically negative.
+
+For example:
+
+If the trial requires HbA1c 6.5–8.0% and HbA1c is missing:
+
+Result = unknown
+
+NOT:
+
+Result = not_met
+
+However, if a required criterion is unknown,
+the overall result cannot be ELIGIBLE.
+
+Do not make a clinical enrollment decision.
+
+This is a preliminary automated eligibility assessment.
+
+==================================================
+OUTPUT
+==================================================
+
+Return ONLY valid JSON.
+
+Use:
 
 {
-  "eligibility_verification": [
+  "verification_status": "MATCH",
+  "verified_trials": [
     {
-      "trial_id": "...",
-      "trial_name": "...",
-      "status": "POTENTIAL_MATCH | NOT_ELIGIBLE | BLOCKED | INSUFFICIENT_INFORMATION",
-      "gating_criteria_satisfied": true,
-      "known_exclusions": [],
-      "unknown_criteria": [],
-      "missing_information": [],
-      "explanation": "..."
+      "trial_id": "",
+      "trial_title": "",
+      "eligibility": "ELIGIBLE",
+      "inclusion_criteria": [
+        {
+          "criterion": "",
+          "result": "met"
+        }
+      ],
+      "exclusion_criteria": [
+        {
+          "criterion": "",
+          "result": "not_present"
+        }
+      ]
     }
   ]
 }
 
-PATIENT CLINICAL PROFILE:
+If at least one trial is ELIGIBLE:
 
-{clinical_profile}
+"verification_status": "MATCH"
 
-TRIAL MATCHING RESULTS:
+If no trial is eligible:
 
-{trial_matches}
+"verification_status": "NO_MATCH"
+
+If candidate trials exist but required information
+is missing:
+
+"verification_status": "INSUFFICIENT_INFORMATION"
+
+Return ONLY JSON.
 """
 
 
-eligibility_verification_agent = LlmAgent(
-    name="Eligibility_Verification_Agent",
+eligibility_verification_agent = Agent(
+
     model="gemini-3.6-flash",
+
+    name="Eligibility_Verification_Agent",
+
+    description=(
+        "Performs detailed inclusion and exclusion criteria "
+        "verification for candidate clinical trials."
+    ),
+
     instruction=ELIGIBILITY_VERIFICATION_INSTRUCTION,
-    output_key="eligibility_verification",
+
+    output_key="eligibility_results"
 )
 
 
@@ -455,259 +617,321 @@ eligibility_verification_agent = LlmAgent(
 # ============================================================
 
 CDS_CARD_INSTRUCTION = """
-You are the HeLaSync CDS Card Agent.
+You are HeLaSync Agent 5: CDS Card Agent.
 
-Your job is to convert the eligibility verification results into a
-CDS Hooks response.
+Agent 4 produced:
 
-The CDS card must be concise, clinician-facing, and must not make a
-definitive clinical trial eligibility determination.
+{eligibility_results}
 
-Use these eligibility statuses:
+Agent 1 produced:
 
-- BLOCKED
-- NOT_ELIGIBLE
-- POTENTIAL_MATCH
-- INSUFFICIENT_INFORMATION
+{patient_data}
 
-IMPORTANT SAFETY RULE:
+Your ONLY job is to convert the Agent 4 result into
+a valid CDS Hooks response.
 
-Do not use numeric match percentages such as:
+==================================================
+MATCH
+==================================================
 
-90%
-87%
-7/8 criteria
-8/10 criteria
+If:
 
-or any other numerical eligibility score.
+"verification_status": "MATCH"
 
-A patient must satisfy all core/gating disease-defining criteria
-before a clinical trial can be presented as a Potential Match.
+return one CDS Hooks card.
 
-If a required gating criterion is NOT_MET or UNKNOWN, do not present
-the trial as a Potential Match.
+The card should include:
 
-If a trial is NOT_ELIGIBLE, BLOCKED, or INSUFFICIENT_INFORMATION,
-do not create a clinical trial opportunity card.
+- Trial title
+- Trial ID
+- Why the patient appears to match
+- Important verified eligibility information
+- A statement that this is a preliminary automated assessment
 
-Only create a clinical trial opportunity card for:
+The card MUST also include an Interested suggestion.
 
-POTENTIAL_MATCH
+The Interested suggestion must create a FHIR R4 Task.
 
-For a POTENTIAL_MATCH, create exactly one CDS Hooks card.
+The Task represents clinician interest in referring the
+patient to the specific clinical trial.
 
-The card must use this structure:
+==================================================
+FHIR TASK
+==================================================
+
+Use:
+
+{
+  "resourceType": "Task",
+  "status": "requested",
+  "intent": "order",
+  "code": {
+    "text": "HeLaSync clinical trial referral"
+  },
+  "identifier": [
+    {
+      "system": "https://helasync.org/referral",
+      "value": "[TRIAL ID]"
+    }
+  ],
+  "description": "Clinician interested in referral to [TRIAL TITLE]",
+  "for": {
+    "reference": "Patient/[PATIENT ID]"
+  }
+}
+
+IMPORTANT:
+
+The trial ID MUST come from Agent 4.
+
+The trial title MUST come from Agent 4.
+
+The patient ID MUST come from Agent 1.
+
+Do not invent a trial ID.
+
+Do not invent a patient ID.
+
+==================================================
+INTERESTED SUGGESTION
+==================================================
+
+Use:
+
+{
+  "label": "Interested",
+  "actions": [
+    {
+      "type": "create",
+      "description": "Create a HeLaSync clinical trial referral Task",
+      "resource": {
+        "resourceType": "Task",
+        "status": "requested",
+        "intent": "order",
+        "code": {
+          "text": "HeLaSync clinical trial referral"
+        },
+        "identifier": [
+          {
+            "system": "https://helasync.org/referral",
+            "value": "[TRIAL ID]"
+          }
+        ],
+        "description": "Clinician interested in referral to [TRIAL TITLE]",
+        "for": {
+          "reference": "Patient/[PATIENT ID]"
+        }
+      }
+    }
+  ]
+}
+
+==================================================
+SELECTION BEHAVIOR
+==================================================
+
+Because the card contains a single clinician action,
+use:
+
+"selectionBehavior": "at-most-one"
+
+==================================================
+ADDITIONAL INFORMATION
+==================================================
+
+Include:
+
+{
+  "label": "Additional Information",
+  "url": "https://helasync.app/launch",
+  "type": "absolute"
+}
+
+The backend will normalize this URL.
+
+==================================================
+NO MATCH
+==================================================
+
+If:
+
+"verification_status": "NO_MATCH"
+
+return:
+
+{
+  "cards": []
+}
+
+==================================================
+INSUFFICIENT INFORMATION
+==================================================
+
+If:
+
+"verification_status": "INSUFFICIENT_INFORMATION"
+
+return one informational card explaining that additional
+information is required to determine potential eligibility.
+
+Do NOT present an Interested referral action when
+eligibility information is insufficient.
+
+==================================================
+IMPORTANT
+==================================================
+
+Do NOT perform your own eligibility analysis.
+
+Agent 4 is the source of truth.
+
+Do NOT invent clinical information.
+
+Do NOT invent trial information.
+
+Do NOT make a final enrollment decision.
+
+Do NOT expose direct patient identifiers in the
+human-readable CDS card.
+
+The patient identifier may appear inside the FHIR Task
+resource because it is required to associate the referral
+intent with the patient.
+
+==================================================
+OUTPUT
+==================================================
+
+Return ONLY valid JSON.
+
+For MATCH:
 
 {
   "cards": [
     {
-      "summary": "Potential Clinical Trial Opportunity",
+      "summary": "Potential clinical trial match",
+      "detail": "Trial: [TRIAL TITLE] ([TRIAL ID])\\n\\nThis patient appears to meet the documented eligibility criteria based on available information. This is a preliminary automated assessment and requires clinical/research staff verification.",
       "indicator": "info",
-      "detail": "...",
       "source": {
         "label": "HeLaSync"
       },
-      "links": [
-        {
-          "label": "Additional Information",
-          "url": "https://helasync.app/launch",
-          "type": "absolute"
-        }
-      ],
+      "selectionBehavior": "at-most-one",
       "suggestions": [
         {
           "label": "Interested",
-          "uuid": "helasync-interest-TRIAL_ID",
+          "uuid": "helasync-referral",
           "actions": [
             {
               "type": "create",
-              "description": "Initiate a HeLaSync clinical trial referral for this matched study",
+              "description": "Create a HeLaSync clinical trial referral Task",
               "resource": {
                 "resourceType": "Task",
                 "status": "requested",
                 "intent": "order",
                 "code": {
                   "text": "HeLaSync clinical trial referral"
-                }
-              }
-            }
-          ]
-        },
-        {
-          "label": "Not Interested",
-          "uuid": "helasync-not-interested-TRIAL_ID",
-          "actions": [
-            {
-              "type": "create",
-              "description": "Record that the clinician is not interested in this clinical trial opportunity",
-              "resource": {
-                "resourceType": "Communication",
-                "status": "completed",
-                "category": [
+                },
+                "identifier": [
                   {
-                    "text": "HeLaSync Trial Interest"
+                    "system": "https://helasync.org/referral",
+                    "value": "[TRIAL ID]"
                   }
                 ],
-                "reasonCode": [
-                  {
-                    "text": "Not Interested"
-                  }
-                ]
+                "description": "Clinician interested in referral to [TRIAL TITLE]",
+                "for": {
+                  "reference": "Patient/[PATIENT ID]"
+                }
               }
             }
           ]
         }
       ],
-      "selectionBehavior": "at-most-one"
+      "links": [
+        {
+          "label": "Additional Information",
+          "url": "https://helasync.app/launch",
+          "type": "absolute"
+        }
+      ]
     }
   ]
 }
 
-============================================================
-ADDITIONAL INFORMATION LINK
-============================================================
+For NO_MATCH:
 
-The Additional Information link MUST use exactly:
+{
+  "cards": []
+}
 
-"url": "https://helasync.app/launch"
+For INSUFFICIENT_INFORMATION:
 
-and:
+{
+  "cards": [
+    {
+      "summary": "Additional information needed",
+      "detail": "Additional patient information is required before potential trial eligibility can be determined.",
+      "indicator": "info",
+      "source": {
+        "label": "HeLaSync"
+      }
+    }
+  ]
+}
 
-"type": "absolute"
-
-Do NOT use:
-
-"type": "smart"
-
-Do NOT include:
-
-"appContext"
-
-for this Stage 1 prototype.
-
-The URL MUST be returned as a plain URL string.
-
-Do NOT use Markdown.
-
-Do NOT return:
-
-"[https://helasync.app/launch](https://helasync.app/launch)"
-
-Do NOT return:
-
-"https://helasync.app/launch"
-
-inside a Markdown hyperlink.
-
-Return exactly:
-
-"https://helasync.app/launch"
-
-The Additional Information link opens the HeLaSync Smart App.
-
-============================================================
-INTERESTED BUTTON
-============================================================
-
-The Interested button represents clinician interest in referring
-the patient to the specific clinical trial.
-
-Use the actual trial ID when constructing the UUID.
-
-Example:
-
-"helasync-interest-NCTFAKE003"
-
-The action should create a FHIR Task representing the referral
-request.
-
-For this Stage 1 prototype, the Task represents the referral
-intent.
-
-The actual backend referral workflow will be implemented separately.
-
-============================================================
-NOT INTERESTED BUTTON
-============================================================
-
-The Not Interested button represents clinician rejection or
-dismissal of the clinical trial opportunity.
-
-Use the actual trial ID when constructing the UUID.
-
-Example:
-
-"helasync-not-interested-NCTFAKE003"
-
-The action should create a FHIR Communication representing the
-clinician's decision.
-
-For this Stage 1 prototype, the Communication represents the
-clinician's decision.
-
-The actual persistence workflow will be implemented separately.
-
-============================================================
-CARD CONTENT
-============================================================
-
-Use the actual trial name and trial ID from the eligibility
-verification results.
-
-The detail should contain:
-
-Trial Name: [trial name]
-Trial ID: [trial ID]
-Eligibility Status: [eligibility status]
-
-Explanation: [brief explanation]
-
-Always include:
-
-"Please note that this is a preliminary automated assessment, and clinical/research staff verification is required."
-
-Keep the card concise.
-
-Do not expose unnecessary patient information in the CDS card.
-
-Do not include patient name, date of birth, address, medical record
-number, or other direct identifiers in the card.
-
-============================================================
-OUTPUT
-============================================================
-
-Return valid JSON only.
-
-Do not return Markdown.
-
-Do not return code fences.
-
-Do not include explanations outside the JSON.
-
-The final output must be directly usable as a CDS Hooks response.
+Return ONLY valid JSON.
 """
 
 
-cds_card_agent = LlmAgent(
-    name="CDS_Card_Agent",
+cds_card_agent = Agent(
+
     model="gemini-3.6-flash",
+
+    name="CDS_Card_Agent",
+
+    description=(
+        "Converts the eligibility verification result "
+        "into a CDS Hooks response with clinical trial "
+        "referral actions."
+    ),
+
     instruction=CDS_CARD_INSTRUCTION,
-    output_key="cds_card",
+
+    output_key="cds_card"
 )
 
 
 # ============================================================
-# ROOT 5-AGENT PIPELINE
+# HELASYNC 5-AGENT SEQUENTIAL WORKFLOW
 # ============================================================
 
 root_agent = SequentialAgent(
-    name="HeLaSync_Clinical_Trial_Matching_Pipeline",
+
+    name="HeLaSync_Pipeline",
+
+    description=(
+        "Five-agent clinical trial matching pipeline that "
+        "extracts FHIR patient data, creates a clinical "
+        "profile, identifies potential clinical trials, "
+        "verifies eligibility, and generates a CDS Hooks "
+        "response with referral workflow actions."
+    ),
+
     sub_agents=[
+
+        # Agent 1
         patient_data_agent,
+
+        # Agent 2
         clinical_profile_agent,
+
+        # Agent 3
         trial_matching_agent,
+
+        # Agent 4
         eligibility_verification_agent,
-        cds_card_agent,
-    ],
+
+        # Agent 5
+        cds_card_agent
+
+    ]
 )
