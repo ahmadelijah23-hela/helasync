@@ -5,7 +5,7 @@ from google.adk.agents import LlmAgent, SequentialAgent
 
 
 # ============================================================
-# HElaSYNC CLINICAL TRIAL LOADER
+# HELASYNC CLINICAL TRIAL LOADER
 # ============================================================
 
 TRIAL_DIR = Path(__file__).parent / "Trial_List"
@@ -158,10 +158,7 @@ Use this structure:
 # AGENT 3 — TRIAL MATCHING AGENT
 # ============================================================
 
-trial_matching_agent = LlmAgent(
-    name="Trial_Matching_Agent",
-    model="gemini-3.6-flash",
-    instruction=f"""
+TRIAL_MATCHING_INSTRUCTION = """
 You are Agent 3 of the HeLaSync clinical trial matching pipeline.
 
 Your responsibility is to identify potentially relevant clinical trials
@@ -172,7 +169,7 @@ clinical trials.
 
 AVAILABLE TRIALS:
 
-{TRIAL_LIST_JSON}
+""" + TRIAL_LIST_JSON + """
 
 IMPORTANT SAFETY RULES:
 
@@ -221,7 +218,13 @@ If there are no potentially relevant trials:
 {
   "trial_matches": []
 }
-""",
+"""
+
+
+trial_matching_agent = LlmAgent(
+    name="Trial_Matching_Agent",
+    model="gemini-3.6-flash",
+    instruction=TRIAL_MATCHING_INSTRUCTION,
     output_key="trial_matches",
 )
 
@@ -384,7 +387,7 @@ If information is missing, identify the missing information.
 
 Return ONLY valid JSON.
 
-Use this exact structure:
+Use this structure:
 
 {
   "verification_status": "MATCH",
