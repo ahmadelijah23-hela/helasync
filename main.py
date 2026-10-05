@@ -11,6 +11,12 @@ from google.genai import types
 from agent import root_agent
 from privacy.gateway import PrivacyGateway
 
+from referral import (
+    create_referral,
+    get_referral,
+    list_referrals,
+)
+
 
 # ============================================================
 # FASTAPI APPLICATION
@@ -19,7 +25,7 @@ from privacy.gateway import PrivacyGateway
 app = FastAPI(
     title="HeLaSync API",
     description="HeLaSync clinical trial matching and CDS Hooks API",
-    version="1.1-STAGE1",
+    version="1.2-STAGE2",
 )
 
 
@@ -64,11 +70,12 @@ runner = Runner(
 
 @app.get("/")
 async def root():
+
     return {
         "message": "HeLaSync API is running",
         "status": "healthy",
         "pipeline": "5-agent clinical trial matching pipeline",
-        "version": "1.1-STAGE1",
+        "version": "1.2-STAGE2",
     }
 
 
@@ -78,9 +85,10 @@ async def root():
 
 @app.get("/agent-status")
 async def agent_status():
+
     return {
         "status": "healthy",
-        "version": "1.1-STAGE1",
+        "version": "1.2-STAGE2",
         "pipeline": [
             "Patient_Data_Agent",
             "Clinical_Profile_Agent",
@@ -96,12 +104,16 @@ async def agent_status():
 # ============================================================
 
 @app.post("/privacy/process-patient")
-async def process_patient(patient_data: Dict[str, Any]):
+async def process_patient(
+    patient_data: Dict[str, Any]
+):
 
     try:
 
-        sanitized_data = privacy_gateway.process_patient(
-            patient_data
+        sanitized_data = (
+            privacy_gateway.process_patient(
+                patient_data
+            )
         )
 
         return {
@@ -154,11 +166,158 @@ async def cds_services():
 
 
 # ============================================================
+# STAGE 2
+# CREATE HELASYNC REFERRAL
+# ============================================================
+
+@app.post("/referrals")
+async def create_helasync_referral(
+    referral_request: Dict[str, Any]
+):
+
+    try:
+
+        # --------------------------------------------------------
+        # Extract referral information
+        # --------------------------------------------------------
+
+        trial_id = referral_request.get(
+            "trial_id"
+        )
+
+        patient_id = referral_request.get(
+            "patient_id"
+        )
+
+        clinician_id = referral_request.get(
+            "clinician_id"
+        )
+
+        encounter_id = referral_request.get(
+            "encounter_id"
+        )
+
+
+        # --------------------------------------------------------
+        # Validate trial ID
+        # --------------------------------------------------------
+
+        if not trial_id:
+
+            return {
+                "status": "error",
+                "message": "trial_id is required",
+            }
+
+
+        # --------------------------------------------------------
+        # Validate patient ID
+        # --------------------------------------------------------
+
+        if not patient_id:
+
+            return {
+                "status": "error",
+                "message": "patient_id is required",
+            }
+
+
+        # --------------------------------------------------------
+        # Create referral
+        # --------------------------------------------------------
+
+        referral = create_referral(
+            trial_id=trial_id,
+            patient_id=patient_id,
+            clinician_id=clinician_id,
+            encounter_id=encounter_id,
+            source="CDS Hooks",
+        )
+
+
+        # --------------------------------------------------------
+        # Return referral
+        # --------------------------------------------------------
+
+        return {
+            "status": "success",
+            "message": (
+                "HeLaSync clinical trial referral created"
+            ),
+            "referral": referral,
+        }
+
+
+    except ValueError as e:
+
+        return {
+            "status": "error",
+            "message": str(e),
+        }
+
+
+    except Exception as e:
+
+        return {
+            "status": "error",
+            "message": (
+                "Unable to create HeLaSync referral"
+            ),
+            "error": str(e),
+        }
+
+
+# ============================================================
+# GET SINGLE REFERRAL
+# ============================================================
+
+@app.get("/referrals/{referral_id}")
+async def get_helasync_referral(
+    referral_id: str
+):
+
+    referral = get_referral(
+        referral_id
+    )
+
+    if referral is None:
+
+        return {
+            "status": "not_found",
+            "message": "Referral not found",
+        }
+
+
+    return {
+        "status": "success",
+        "referral": referral,
+    }
+
+
+# ============================================================
+# LIST REFERRALS
+# ============================================================
+
+@app.get("/referrals")
+async def get_helasync_referrals():
+
+    referrals = list_referrals()
+
+    return {
+        "status": "success",
+        "count": len(referrals),
+        "referrals": referrals,
+    }
+
+
+# ============================================================
 # HELASYNC CDS HOOK
 # ============================================================
 
 @app.post("/cds-services/helasync")
-async def helasync_cds(request: Dict[str, Any]):
+async def helasync_cds(
+    request: Dict[str, Any]
+):
 
     try:
 
@@ -186,6 +345,11 @@ async def helasync_cds(request: Dict[str, Any]):
             "unknown-patient",
         )
 
+        encounter_id = context.get(
+            "encounterId",
+            None,
+        )
+
         prefetch = request.get(
             "prefetch",
             {},
@@ -203,18 +367,28 @@ async def helasync_cds(request: Dict[str, Any]):
             if resource is None:
                 continue
 
+
             if (
                 isinstance(resource, dict)
-                and resource.get("resourceType") == "Bundle"
+                and resource.get(
+                    "resourceType"
+                ) == "Bundle"
             ):
 
-                for entry in resource.get("entry", []):
+                for entry in resource.get(
+                    "entry",
+                    []
+                ):
 
-                    if entry.get("resource"):
+                    if entry.get(
+                        "resource"
+                    ):
 
                         entries.append(
                             {
-                                "resource": entry["resource"]
+                                "resource": entry[
+                                    "resource"
+                                ]
                             }
                         )
 
@@ -268,7 +442,7 @@ async def helasync_cds(request: Dict[str, Any]):
 
 
         # ========================================================
-        # 5. CREATE PATIENT CONTEXT FOR AGENTS
+        # 5. CREATE PATIENT CONTEXT FOR ADK
         # ========================================================
 
         patient_context = json.dumps(
@@ -342,12 +516,19 @@ The response must be valid JSON.
 
             if event.is_final_response():
 
-                if event.content and event.content.parts:
+                if (
+                    event.content
+                    and event.content.parts
+                ):
 
                     final_output = "".join(
                         part.text
                         for part in event.content.parts
-                        if getattr(part, "text", None)
+                        if getattr(
+                            part,
+                            "text",
+                            None
+                        )
                     )
 
 
@@ -367,8 +548,14 @@ The response must be valid JSON.
 
                 cleaned_output = (
                     final_output
-                    .replace("```json", "")
-                    .replace("```", "")
+                    .replace(
+                        "```json",
+                        ""
+                    )
+                    .replace(
+                        "```",
+                        ""
+                    )
                     .strip()
                 )
 
@@ -394,7 +581,7 @@ The response must be valid JSON.
                                 ),
                                 "source": {
                                     "label": (
-                                        "HeLaSync v1.1-STAGE1"
+                                        "HeLaSync v1.2-STAGE2"
                                     )
                                 },
                             }
@@ -416,7 +603,9 @@ The response must be valid JSON.
                             "pipeline."
                         ),
                         "source": {
-                            "label": "HeLaSync v1.1-STAGE1"
+                            "label": (
+                                "HeLaSync v1.2-STAGE2"
+                            )
                         },
                     }
                 ]
@@ -434,33 +623,14 @@ The response must be valid JSON.
 
 
         # ========================================================
-        # 11. STAGE 1 TEST
-        #
-        # IMPORTANT:
-        #
-        # We intentionally overwrite BOTH:
-        #
-        # 1. Source label
-        # 2. Additional Information URL
-        #
-        # This proves that main.py is modifying the final response
-        # AFTER the AI agents finish.
+        # 11. PRESERVE STAGE 1 LINK
         # ========================================================
 
         for card in cards:
 
-            # ----------------------------------------------------
-            # TEST MARKER
-            # ----------------------------------------------------
-
             card["source"] = {
-                "label": "HeLaSync v1.1-STAGE1"
+                "label": "HeLaSync v1.2-STAGE2"
             }
-
-
-            # ----------------------------------------------------
-            # FORCE PLAIN ABSOLUTE URL
-            # ----------------------------------------------------
 
             card["links"] = [
                 {
@@ -472,7 +642,7 @@ The response must be valid JSON.
 
 
         # ========================================================
-        # 12. RETURN FINAL CDS HOOKS RESPONSE
+        # 12. RETURN CDS HOOKS RESPONSE
         # ========================================================
 
         return {
@@ -498,7 +668,7 @@ The response must be valid JSON.
                         "processing this request."
                     ),
                     "source": {
-                        "label": "HeLaSync v1.1-STAGE1"
+                        "label": "HeLaSync v1.2-STAGE2"
                     },
                 }
             ]
