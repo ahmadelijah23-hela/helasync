@@ -9,7 +9,6 @@ from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
 from agent import root_agent
-
 from privacy.gateway import PrivacyGateway
 
 
@@ -20,7 +19,7 @@ from privacy.gateway import PrivacyGateway
 app = FastAPI(
     title="HeLaSync API",
     description="HeLaSync clinical trial matching and CDS Hooks API",
-    version="1.0.0",
+    version="1.1-STAGE1",
 )
 
 
@@ -69,6 +68,7 @@ async def root():
         "message": "HeLaSync API is running",
         "status": "healthy",
         "pipeline": "5-agent clinical trial matching pipeline",
+        "version": "1.1-STAGE1",
     }
 
 
@@ -80,6 +80,7 @@ async def root():
 async def agent_status():
     return {
         "status": "healthy",
+        "version": "1.1-STAGE1",
         "pipeline": [
             "Patient_Data_Agent",
             "Clinical_Profile_Agent",
@@ -96,16 +97,12 @@ async def agent_status():
 
 @app.post("/privacy/process-patient")
 async def process_patient(patient_data: Dict[str, Any]):
-    """
-    Process patient information through the HeLaSync Privacy Gateway.
-
-    The Privacy Gateway is responsible for removing or transforming
-    identifying patient information before data is passed to the
-    HeLaSync AI pipeline.
-    """
 
     try:
-        sanitized_data = privacy_gateway.process_patient(patient_data)
+
+        sanitized_data = privacy_gateway.process_patient(
+            patient_data
+        )
 
         return {
             "status": "success",
@@ -114,6 +111,7 @@ async def process_patient(patient_data: Dict[str, Any]):
         }
 
     except Exception as e:
+
         return {
             "status": "error",
             "privacy_processed": False,
@@ -127,9 +125,6 @@ async def process_patient(patient_data: Dict[str, Any]):
 
 @app.get("/cds-services")
 async def cds_services():
-    """
-    CDS Hooks service discovery endpoint.
-    """
 
     return {
         "services": [
@@ -164,27 +159,12 @@ async def cds_services():
 
 @app.post("/cds-services/helasync")
 async def helasync_cds(request: Dict[str, Any]):
-    """
-    Main HeLaSync CDS Hooks endpoint.
-
-    Flow:
-
-    CDS Hooks Request
-            ↓
-    Extract FHIR prefetch data
-            ↓
-    Privacy Gateway
-            ↓
-    HeLaSync 5-Agent Pipeline
-            ↓
-    CDS Hooks Card
-    """
 
     try:
 
-        # --------------------------------------------------------
-        # 1. Extract request information
-        # --------------------------------------------------------
+        # ========================================================
+        # 1. EXTRACT CDS HOOKS REQUEST INFORMATION
+        # ========================================================
 
         hook_instance = request.get(
             "hookInstance",
@@ -196,7 +176,10 @@ async def helasync_cds(request: Dict[str, Any]):
             "helasync-clinician",
         )
 
-        context = request.get("context", {})
+        context = request.get(
+            "context",
+            {},
+        )
 
         patient_id = context.get(
             "patientId",
@@ -209,9 +192,9 @@ async def helasync_cds(request: Dict[str, Any]):
         )
 
 
-        # --------------------------------------------------------
-        # 2. Convert prefetch resources into a FHIR Bundle
-        # --------------------------------------------------------
+        # ========================================================
+        # 2. BUILD FHIR BUNDLE
+        # ========================================================
 
         entries = []
 
@@ -220,13 +203,15 @@ async def helasync_cds(request: Dict[str, Any]):
             if resource is None:
                 continue
 
-            # Some CDS Hooks environments may return a Bundle.
-            if isinstance(resource, dict) and resource.get(
-                "resourceType"
-            ) == "Bundle":
+            if (
+                isinstance(resource, dict)
+                and resource.get("resourceType") == "Bundle"
+            ):
 
                 for entry in resource.get("entry", []):
+
                     if entry.get("resource"):
+
                         entries.append(
                             {
                                 "resource": entry["resource"]
@@ -249,9 +234,9 @@ async def helasync_cds(request: Dict[str, Any]):
         }
 
 
-        # --------------------------------------------------------
-        # 3. Build patient data for Privacy Gateway
-        # --------------------------------------------------------
+        # ========================================================
+        # 3. BUILD PATIENT DATA FOR PRIVACY GATEWAY
+        # ========================================================
 
         patient_data = {
             "patientId": patient_id,
@@ -259,9 +244,9 @@ async def helasync_cds(request: Dict[str, Any]):
         }
 
 
-        # --------------------------------------------------------
-        # 4. Process through Privacy Gateway
-        # --------------------------------------------------------
+        # ========================================================
+        # 4. PRIVACY GATEWAY
+        # ========================================================
 
         try:
 
@@ -273,8 +258,6 @@ async def helasync_cds(request: Dict[str, Any]):
 
         except Exception as privacy_error:
 
-            # Keep the CDS service operational if the Privacy
-            # Gateway implementation returns an unexpected format.
             sanitized_patient_data = {
                 "patientId": patient_id,
                 "fhirBundle": fhir_bundle,
@@ -284,9 +267,9 @@ async def helasync_cds(request: Dict[str, Any]):
             }
 
 
-        # --------------------------------------------------------
-        # 5. Convert sanitized data into an ADK message
-        # --------------------------------------------------------
+        # ========================================================
+        # 5. CREATE PATIENT CONTEXT FOR AGENTS
+        # ========================================================
 
         patient_context = json.dumps(
             sanitized_patient_data,
@@ -301,8 +284,7 @@ You are processing a CDS Hooks patient-view request for HeLaSync.
 The following patient information has already passed through the
 HeLaSync Privacy Gateway.
 
-Use this information to perform the clinical trial matching
-workflow.
+Use this information to perform the clinical trial matching workflow.
 
 Do not expose direct patient identifiers in the CDS card.
 
@@ -321,9 +303,9 @@ The response must be valid JSON.
 """
 
 
-        # --------------------------------------------------------
-        # 6. Create ADK session
-        # --------------------------------------------------------
+        # ========================================================
+        # 6. CREATE ADK SESSION
+        # ========================================================
 
         session = await session_service.create_session(
             app_name=APP_NAME,
@@ -332,9 +314,9 @@ The response must be valid JSON.
         )
 
 
-        # --------------------------------------------------------
-        # 7. Create ADK message
-        # --------------------------------------------------------
+        # ========================================================
+        # 7. CREATE ADK MESSAGE
+        # ========================================================
 
         content = types.Content(
             role="user",
@@ -346,9 +328,9 @@ The response must be valid JSON.
         )
 
 
-        # --------------------------------------------------------
-        # 8. Run the 5-agent pipeline
-        # --------------------------------------------------------
+        # ========================================================
+        # 8. RUN 5-AGENT PIPELINE
+        # ========================================================
 
         final_output = None
 
@@ -369,9 +351,9 @@ The response must be valid JSON.
                     )
 
 
-        # --------------------------------------------------------
-        # 9. Parse Agent 5 output
-        # --------------------------------------------------------
+        # ========================================================
+        # 9. PARSE AGENT 5 OUTPUT
+        # ========================================================
 
         if final_output:
 
@@ -383,7 +365,6 @@ The response must be valid JSON.
 
             except json.JSONDecodeError:
 
-                # Handle accidental Markdown code fences.
                 cleaned_output = (
                     final_output
                     .replace("```json", "")
@@ -403,17 +384,18 @@ The response must be valid JSON.
                         "cards": [
                             {
                                 "summary": (
-                                    "HeLaSync Clinical Trial "
-                                    "Matching"
+                                    "HeLaSync Clinical Trial Matching"
                                 ),
                                 "indicator": "warning",
                                 "detail": (
                                     "The HeLaSync clinical trial "
-                                    "matching pipeline returned "
-                                    "an unexpected response format."
+                                    "matching pipeline returned an "
+                                    "unexpected response format."
                                 ),
                                 "source": {
-                                    "label": "HeLaSync"
+                                    "label": (
+                                        "HeLaSync v1.1-STAGE1"
+                                    )
                                 },
                             }
                         ]
@@ -429,21 +411,21 @@ The response must be valid JSON.
                         ),
                         "indicator": "warning",
                         "detail": (
-                            "No final response was returned "
-                            "by the HeLaSync clinical trial "
-                            "matching pipeline."
+                            "No final response was returned by "
+                            "the HeLaSync clinical trial matching "
+                            "pipeline."
                         ),
                         "source": {
-                            "label": "HeLaSync"
+                            "label": "HeLaSync v1.1-STAGE1"
                         },
                     }
                 ]
             }
 
 
-        # --------------------------------------------------------
-        # 10. Get CDS cards
-        # --------------------------------------------------------
+        # ========================================================
+        # 10. GET CDS CARDS
+        # ========================================================
 
         cards = result.get(
             "cards",
@@ -451,21 +433,34 @@ The response must be valid JSON.
         )
 
 
-        # --------------------------------------------------------
-        # 11. STAGE 1 FIX
+        # ========================================================
+        # 11. STAGE 1 TEST
         #
-        # Force Additional Information to be a plain absolute URL.
+        # IMPORTANT:
         #
-        # This prevents Gemini from returning:
+        # We intentionally overwrite BOTH:
         #
-        # [https://helasync.app/launch](https://helasync.app/launch)
+        # 1. Source label
+        # 2. Additional Information URL
         #
-        # and guarantees:
-        #
-        # https://helasync.app/launch
-        # --------------------------------------------------------
+        # This proves that main.py is modifying the final response
+        # AFTER the AI agents finish.
+        # ========================================================
 
         for card in cards:
+
+            # ----------------------------------------------------
+            # TEST MARKER
+            # ----------------------------------------------------
+
+            card["source"] = {
+                "label": "HeLaSync v1.1-STAGE1"
+            }
+
+
+            # ----------------------------------------------------
+            # FORCE PLAIN ABSOLUTE URL
+            # ----------------------------------------------------
 
             card["links"] = [
                 {
@@ -476,9 +471,9 @@ The response must be valid JSON.
             ]
 
 
-        # --------------------------------------------------------
-        # 12. Return CDS Hooks response
-        # --------------------------------------------------------
+        # ========================================================
+        # 12. RETURN FINAL CDS HOOKS RESPONSE
+        # ========================================================
 
         return {
             "cards": cards
@@ -487,9 +482,10 @@ The response must be valid JSON.
 
     except Exception as e:
 
-        # --------------------------------------------------------
-        # ERROR RESPONSE
-        # --------------------------------------------------------
+        print(
+            "HeLaSync CDS Hooks Error:",
+            str(e),
+        )
 
         return {
             "cards": [
@@ -502,7 +498,7 @@ The response must be valid JSON.
                         "processing this request."
                     ),
                     "source": {
-                        "label": "HeLaSync"
+                        "label": "HeLaSync v1.1-STAGE1"
                     },
                 }
             ]
