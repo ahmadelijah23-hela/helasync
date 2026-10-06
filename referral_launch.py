@@ -1,413 +1,774 @@
-# ============================================================
-# HELASYNC CLINICIAN SMART APP
-# Stage 3A
-#
-# This file provides the clinician-facing Smart App experience
-# launched from the CDS Hooks "Additional Information" link.
-#
-# Prototype route:
-#   GET  /referral-launch
-#   POST /referrals/from-cds
-#
-# IMPORTANT:
-# This is a prototype implementation.
-# Patient/clinician context is currently passed through URL/form
-# parameters. Production SMART-on-FHIR authentication and launch
-# context will replace this later.
-# ============================================================
-
-import html
-import json
-from pathlib import Path
-from typing import Any, Dict, Optional
-from urllib.parse import urlencode
-
 from fastapi import APIRouter, Form, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
+from urllib.parse import urlencode
+from pathlib import Path
+import json
+import html
+from datetime import datetime, timezone
 
 from referral import create_referral
 
-
-# ============================================================
-# ROUTER
-# ============================================================
 
 router = APIRouter()
 
 
 # ============================================================
-# HELASYNC CONFIGURATION
+# CONFIGURATION
 # ============================================================
 
-HELASYNC_URL = "https://helasync.app"
+TRIAL_DIR = Path(__file__).parent / "Trial_List"
 
-RESEARCH_DASHBOARD_URL = (
-    "https://helasync.onrender.com/research/referrals"
-)
-
-
-# ============================================================
-# LOAD TRIAL DATA
-# ============================================================
-
-def load_trials() -> Dict[str, Dict[str, Any]]:
-    """
-    Load clinical trial JSON files from Trial_List.
-
-    The Smart App uses the actual trial files rather than
-    inventing trial information.
-    """
-
-    trial_folder = Path(__file__).parent / "Trial_List"
-
-    trials: Dict[str, Dict[str, Any]] = {}
-
-    if not trial_folder.exists():
-        return trials
-
-    for trial_file in sorted(trial_folder.glob("*.json")):
-
-        try:
-
-            with open(
-                trial_file,
-                "r",
-                encoding="utf-8",
-            ) as file:
-
-                trial = json.load(file)
-
-            trial_id = (
-                trial.get("trial_id")
-                or trial.get("id")
-                or trial.get("protocolSection", {})
-                .get("identificationModule", {})
-                .get("nctId")
-            )
-
-            if trial_id:
-                trials[str(trial_id)] = trial
-
-        except Exception:
-            continue
-
-    return trials
-
-
-TRIALS = load_trials()
+# In-memory storage for "Patient Not Interested" responses.
+# This intentionally does NOT create a research referral.
+PATIENT_NOT_INTERESTED_RESPONSES = []
 
 
 # ============================================================
 # TRIAL DATA HELPERS
 # ============================================================
 
-def get_trial(
-    trial_id: str,
-) -> Dict[str, Any]:
-
+def load_trials():
     """
-    Return the requested trial.
-
-    If the trial cannot be found, return a safe fallback
-    containing only the supplied trial ID.
+    Load all clinical trial JSON files from Trial_List/.
     """
+    trials = []
 
-    trial = TRIALS.get(trial_id)
+    if not TRIAL_DIR.exists():
+        return trials
 
-    if trial:
-        return trial
+    for file_path in sorted(TRIAL_DIR.glob("*.json")):
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                trial = json.load(f)
 
-    return {
-        "trial_id": trial_id,
-        "trial_title": "Clinical Trial",
-    }
+            trials.append(trial)
+
+        except Exception as exc:
+            print(f"Could not load trial file {file_path}: {exc}")
+
+    return trials
 
 
-def trial_value(
-    trial: Dict[str, Any],
-    *keys: str,
-    default: str = "",
-) -> str:
-
+def get_trial(trial_id: str):
     """
-    Safely retrieve a value from either the simple synthetic
-    trial format or the ClinicalTrials.gov-style protocol format.
+    Find a trial by NCT/trial ID.
     """
+    if not trial_id:
+        return None
 
-    for key in keys:
+    trial_id = trial_id.strip().upper()
 
-        value = trial.get(key)
+    for trial in load_trials():
 
-        if value not in (None, ""):
-            return str(value)
+        trial_identifier = (
+            trial.get("protocolSection", {})
+            .get("identificationModule", {})
+            .get("nctId")
+        )
 
-    protocol = trial.get(
-        "protocolSection",
-        {},
-    )
+        if trial_identifier and trial_identifier.upper() == trial_id:
+            return trial
 
-    if not isinstance(protocol, dict):
-        return default
+        # Also support simpler JSON structures.
+        simple_id = (
+            trial.get("trial_id")
+            or trial.get("trialId")
+            or trial.get("nct_id")
+            or trial.get("nctId")
+            or trial.get("id")
+        )
 
-    identification = protocol.get(
-        "identificationModule",
-        {},
-    )
+        if simple_id and str(simple_id).upper() == trial_id:
+            return trial
 
-    status = protocol.get(
-        "statusModule",
-        {},
-    )
-
-    design = protocol.get(
-        "designModule",
-        {},
-    )
-
-    description = protocol.get(
-        "descriptionModule",
-        {},
-    )
-
-    contacts = protocol.get(
-        "contactsLocationsModule",
-        {},
-    )
-
-    mapping = {
-
-        "trial_id": identification.get(
-            "nctId"
-        ),
-
-        "trial_title": identification.get(
-            "briefTitle"
-        ),
-
-        "official_title": identification.get(
-            "officialTitle"
-        ),
-
-        "status": status.get(
-            "overallStatus"
-        ),
-
-        "phase": (
-            ", ".join(
-                design.get("phases", [])
-            )
-            if isinstance(
-                design.get("phases"),
-                list,
-            )
-            else design.get("phases")
-        ),
-
-        "brief_summary": description.get(
-            "briefSummary"
-        ),
-
-        "detailed_description": description.get(
-            "detailedDescription"
-        ),
-
-    }
-
-    mapped = mapping.get(
-        keys[0],
-        None,
-    )
-
-    if mapped not in (None, ""):
-        return str(mapped)
-
-    return default
+    return None
 
 
-def get_protocol_section(
-    trial: Dict[str, Any],
-) -> Dict[str, Any]:
-
-    protocol = trial.get(
-        "protocolSection",
-        {},
-    )
-
-    if isinstance(protocol, dict):
-        return protocol
-
-    return {}
+def get_protocol_section(trial):
+    return trial.get("protocolSection", {}) if trial else {}
 
 
-def get_eligibility(
-    trial: Dict[str, Any],
-) -> Dict[str, Any]:
+def get_identification(trial):
+    protocol = get_protocol_section(trial)
 
-    protocol = get_protocol_section(
-        trial
-    )
-
-    eligibility = protocol.get(
-        "eligibilityModule",
-        {},
-    )
-
-    if isinstance(eligibility, dict):
-        return eligibility
-
-    return {}
+    return protocol.get("identificationModule", {})
 
 
-def get_locations(
-    trial: Dict[str, Any],
-) -> list:
+def get_status(trial):
+    protocol = get_protocol_section(trial)
 
-    protocol = get_protocol_section(
-        trial
-    )
+    return protocol.get("statusModule", {})
 
-    contacts = protocol.get(
-        "contactsLocationsModule",
-        {},
-    )
 
-    if not isinstance(
-        contacts,
-        dict,
-    ):
-        return []
+def get_conditions(trial):
+    protocol = get_protocol_section(trial)
 
-    locations = contacts.get(
-        "locations",
-        [],
-    )
+    return protocol.get("conditionsModule", {})
 
-    if isinstance(
-        locations,
-        list,
-    ):
+
+def get_design(trial):
+    protocol = get_protocol_section(trial)
+
+    return protocol.get("designModule", {})
+
+
+def get_intervention(trial):
+    protocol = get_protocol_section(trial)
+
+    return protocol.get("armsInterventionsModule", {})
+
+
+def get_eligibility(trial):
+    protocol = get_protocol_section(trial)
+
+    return protocol.get("eligibilityModule", {})
+
+
+def get_locations(trial):
+    protocol = get_protocol_section(trial)
+
+    location_module = protocol.get("contactsLocationsModule", {})
+
+    locations = location_module.get("locations", [])
+
+    if isinstance(locations, list):
         return locations
 
     return []
 
 
 # ============================================================
-# HTML HELPERS
+# SAFE VALUE HELPERS
 # ============================================================
 
-def esc(
-    value: Any,
-) -> str:
+def first_non_empty(*values, default=""):
+    """
+    Return the first non-empty value.
+    """
+    for value in values:
+        if value is None:
+            continue
 
-    return html.escape(
-        str(value)
+        if isinstance(value, str):
+            if value.strip():
+                return value.strip()
+
+        elif value:
+            return value
+
+    return default
+
+
+def as_text(value, default=""):
+    """
+    Safely convert values into displayable text.
+    """
+    if value is None:
+        return default
+
+    if isinstance(value, str):
+        return value.strip()
+
+    if isinstance(value, list):
+        return ", ".join(str(v) for v in value)
+
+    return str(value)
+
+
+def escape(value):
+    return html.escape(as_text(value))
+
+
+# ============================================================
+# TRIAL PRESENTATION DATA
+# ============================================================
+
+def build_trial_display_data(trial_id, trial):
+    """
+    Build the information displayed in the Smart App.
+
+    IMPORTANT:
+    Trial JSON data is used first.
+
+    If PI, reimbursement, or other fields are not present
+    in the synthetic trial JSON, clearly labeled DEMO values
+    are used instead.
+    """
+
+    identification = get_identification(trial)
+    status = get_status(trial)
+    conditions = get_conditions(trial)
+    design = get_design(trial)
+    interventions = get_intervention(trial)
+    eligibility = get_eligibility(trial)
+    locations = get_locations(trial)
+
+    # --------------------------------------------------------
+    # Trial name
+    # --------------------------------------------------------
+
+    trial_name = first_non_empty(
+        identification.get("briefTitle"),
+        identification.get("officialTitle"),
+        trial.get("trial_name") if trial else None,
+        trial.get("title") if trial else None,
+        default=trial_id,
     )
 
+    # --------------------------------------------------------
+    # Official title
+    # --------------------------------------------------------
 
-def status_badge(
-    status: str,
-) -> str:
-
-    normalized = (
-        status or "UNKNOWN"
-    ).upper()
-
-    if normalized in (
-        "MET",
-        "NOT_PRESENT",
-        "ELIGIBLE",
-    ):
-
-        label = (
-            "MET"
-            if normalized == "MET"
-            else normalized.replace(
-                "_",
-                " ",
-            )
-        )
-
-        return (
-            '<span class="status status-met">'
-            f'{esc(label)}'
-            '</span>'
-        )
-
-    if normalized in (
-        "NOT_MET",
-        "PRESENT",
-        "NOT_ELIGIBLE",
-    ):
-
-        label = normalized.replace(
-            "_",
-            " ",
-        )
-
-        return (
-            '<span class="status status-not-met">'
-            f'{esc(label)}'
-            '</span>'
-        )
-
-    return (
-        '<span class="status status-unknown">'
-        'UNKNOWN'
-        '</span>'
+    official_title = first_non_empty(
+        identification.get("officialTitle"),
+        trial.get("official_title") if trial else None,
+        default=trial_name,
     )
 
+    # --------------------------------------------------------
+    # Trial status
+    # --------------------------------------------------------
+
+    trial_status = first_non_empty(
+        status.get("overallStatus"),
+        trial.get("status") if trial else None,
+        default="RECRUITING",
+    )
+
+    # --------------------------------------------------------
+    # Disease population
+    # --------------------------------------------------------
+
+    condition_list = conditions.get("conditions", [])
+
+    if not isinstance(condition_list, list):
+        condition_list = []
+
+    disease_population = first_non_empty(
+        ", ".join(str(x) for x in condition_list),
+        trial.get("disease_population") if trial else None,
+        trial.get("population") if trial else None,
+        default="Clinical trial population defined by protocol.",
+    )
+
+    # --------------------------------------------------------
+    # Study objective / summary
+    # --------------------------------------------------------
+
+    study_summary = first_non_empty(
+        trial.get("study_summary") if trial else None,
+        trial.get("summary") if trial else None,
+        trial.get("description") if trial else None,
+        default=(
+            "This study is evaluating an investigational treatment "
+            "and its potential effect on patients with the conditions "
+            "specified in the study protocol."
+        ),
+    )
+
+    study_objective = first_non_empty(
+        trial.get("study_objective") if trial else None,
+        trial.get("objective") if trial else None,
+        trial.get("primary_purpose") if trial else None,
+        default=(
+            "The goal of this study is to evaluate the safety, "
+            "effectiveness, and clinical outcomes associated with "
+            "the study intervention in the eligible patient population."
+        ),
+    )
+
+    # --------------------------------------------------------
+    # PI
+    # --------------------------------------------------------
+
+    pi_name = first_non_empty(
+        trial.get("principal_investigator") if trial else None,
+        trial.get("pi_name") if trial else None,
+        trial.get("principalInvestigator") if trial else None,
+        trial.get("investigator") if trial else None,
+        default="Dr. Sarah Mitchell, MD",
+    )
+
+    pi_demo = not any(
+        trial.get(key)
+        for key in [
+            "principal_investigator",
+            "pi_name",
+            "principalInvestigator",
+            "investigator",
+        ]
+    )
+
+    # --------------------------------------------------------
+    # Intervention
+    # --------------------------------------------------------
+
+    intervention_names = []
+
+    interventions_list = interventions.get("interventions", [])
+
+    if isinstance(interventions_list, list):
+
+        for intervention in interventions_list:
+
+            if isinstance(intervention, dict):
+
+                name = first_non_empty(
+                    intervention.get("name"),
+                    intervention.get("interventionName"),
+                )
+
+                if name:
+                    intervention_names.append(name)
+
+    intervention = first_non_empty(
+        ", ".join(intervention_names),
+        trial.get("intervention") if trial else None,
+        trial.get("intervention_name") if trial else None,
+        default="Investigational study intervention",
+    )
+
+    # --------------------------------------------------------
+    # Study duration
+    # --------------------------------------------------------
+
+    study_duration = first_non_empty(
+        trial.get("study_duration") if trial else None,
+        trial.get("duration") if trial else None,
+        design.get("studyDuration"),
+        default="Approximately 12–24 months",
+    )
+
+    # --------------------------------------------------------
+    # Reimbursement
+    # --------------------------------------------------------
+
+    reimbursement = first_non_empty(
+        trial.get("reimbursement") if trial else None,
+        trial.get("participant_reimbursement") if trial else None,
+        trial.get("compensation") if trial else None,
+        default="Up to $500 total participant reimbursement",
+    )
+
+    reimbursement_demo = not any(
+        trial.get(key)
+        for key in [
+            "reimbursement",
+            "participant_reimbursement",
+            "compensation",
+        ]
+    )
+
+    # --------------------------------------------------------
+    # Inclusion criteria
+    # --------------------------------------------------------
+
+    inclusion_criteria = []
+
+    eligibility_text = eligibility.get("eligibilityCriteria", "")
+
+    # First try structured eligibility criteria.
+    structured_inclusion = eligibility.get("inclusionCriteria")
+
+    if isinstance(structured_inclusion, list):
+
+        inclusion_criteria = [
+            str(item)
+            for item in structured_inclusion
+            if item
+        ]
+
+    # Fallback to parsing our synthetic eligibility text.
+    if not inclusion_criteria and eligibility_text:
+
+        lines = str(eligibility_text).splitlines()
+
+        for line in lines:
+
+            cleaned = line.strip()
+
+            if not cleaned:
+                continue
+
+            lower = cleaned.lower()
+
+            if (
+                "inclusion" in lower
+                or "age >=" in lower
+                or "age ≥" in lower
+                or "heart failure" in lower
+                or "diabetes" in lower
+                or "amyloidosis" in lower
+                or "nt-probnp" in lower
+                or "hba1c" in lower
+            ):
+                inclusion_criteria.append(cleaned)
+
+    if not inclusion_criteria:
+
+        inclusion_criteria = [
+            "Patient must meet the age requirement specified by the protocol.",
+            "Patient must have the protocol-defined disease condition.",
+            "Additional laboratory or clinical criteria may apply.",
+        ]
+
+    # --------------------------------------------------------
+    # Exclusion criteria
+    # --------------------------------------------------------
+
+    exclusion_criteria = []
+
+    structured_exclusion = eligibility.get("exclusionCriteria")
+
+    if isinstance(structured_exclusion, list):
+
+        exclusion_criteria = [
+            str(item)
+            for item in structured_exclusion
+            if item
+        ]
+
+    if not exclusion_criteria and eligibility_text:
+
+        lines = str(eligibility_text).splitlines()
+
+        for line in lines:
+
+            cleaned = line.strip()
+
+            if not cleaned:
+                continue
+
+            lower = cleaned.lower()
+
+            if (
+                "exclusion" in lower
+                or "pregnan" in lower
+                or "egfr <" in lower
+                or "heart failure" in lower
+            ):
+                exclusion_criteria.append(cleaned)
+
+    if not exclusion_criteria:
+
+        exclusion_criteria = [
+            "Patients meeting protocol-defined exclusion criteria are not eligible.",
+            "Additional safety exclusions may apply.",
+        ]
+
+    # --------------------------------------------------------
+    # Locations
+    # --------------------------------------------------------
+
+    location_display = []
+
+    for location in locations:
+
+        if not isinstance(location, dict):
+            continue
+
+        facility = first_non_empty(
+            location.get("facility"),
+            location.get("facilityName"),
+        )
+
+        city = location.get("city")
+        state = location.get("state")
+        country = location.get("country")
+
+        pieces = [
+            x for x in [facility, city, state, country]
+            if x
+        ]
+
+        if pieces:
+            location_display.append(", ".join(pieces))
+
+    if not location_display:
+
+        location_display = [
+            "Participating research site — location to be confirmed"
+        ]
+
+    return {
+        "trial_id": trial_id,
+        "trial_name": trial_name,
+        "official_title": official_title,
+        "status": trial_status,
+        "pi_name": pi_name,
+        "pi_demo": pi_demo,
+        "study_summary": study_summary,
+        "study_objective": study_objective,
+        "disease_population": disease_population,
+        "intervention": intervention,
+        "study_duration": study_duration,
+        "reimbursement": reimbursement,
+        "reimbursement_demo": reimbursement_demo,
+        "inclusion_criteria": inclusion_criteria,
+        "exclusion_criteria": exclusion_criteria,
+        "locations": location_display,
+    }
+
 
 # ============================================================
-# ELIGIBILITY DEMO DATA
+# DEMO ELIGIBILITY
 # ============================================================
 
-def build_demo_eligibility(
-    trial_id: str,
-) -> Dict[str, list]:
-
+def build_demo_eligibility(trial_id):
     """
-    Stage 3A intentionally presents a transparent prototype
-    eligibility view.
+    Demo eligibility display for the current prototype.
 
-    The actual Agent 4 eligibility results will be connected
-    in a later Stage 3 iteration.
-
-    We do not calculate a percentage match.
+    This is intentionally labeled as prototype/demo data.
+    Agent 4 should become the source of truth in the next
+    implementation stage.
     """
+
+    trial_id = (trial_id or "").upper()
 
     if trial_id == "NCTFAKE003":
 
-        return {
-            "inclusion": [
-                {
-                    "criterion": "Age ≥18",
-                    "result": "MET",
-                },
-                {
-                    "criterion": "Heart failure",
-                    "result": "MET",
-                },
-                {
-                    "criterion": "NT-proBNP >300",
-                    "result": "MET",
-                },
-            ],
-            "exclusion": [
-                {
-                    "criterion": "Pregnancy",
-                    "result": "NOT_PRESENT",
-                },
-                {
-                    "criterion": "eGFR <30 mL/min/1.73 m²",
-                    "result": "NOT_PRESENT",
-                },
-            ],
-        }
+        return [
+            {
+                "criterion": "Age ≥18",
+                "status": "MET",
+                "detail": "Patient is 65 years old.",
+            },
+            {
+                "criterion": "Heart failure",
+                "status": "MET",
+                "detail": "Heart failure condition documented.",
+            },
+            {
+                "criterion": "NT-proBNP >300 pg/mL",
+                "status": "MET",
+                "detail": "NT-proBNP = 1,200 pg/mL.",
+            },
+            {
+                "criterion": "Pregnancy",
+                "status": "NOT PRESENT",
+                "detail": "No pregnancy finding identified.",
+            },
+            {
+                "criterion": "eGFR <30",
+                "status": "NOT PRESENT",
+                "detail": "eGFR = 65 mL/min/1.73m².",
+            },
+        ]
 
-    return {
-        "inclusion": [],
-        "exclusion": [],
+    if trial_id == "NCTFAKE002":
+
+        return [
+            {
+                "criterion": "Age ≥18",
+                "status": "MET",
+                "detail": "Patient is 65 years old.",
+            },
+            {
+                "criterion": "Heart failure",
+                "status": "MET",
+                "detail": "Heart failure condition documented.",
+            },
+            {
+                "criterion": "Confirmed cardiac amyloidosis",
+                "status": "UNKNOWN",
+                "detail": "No confirmed cardiac amyloidosis documented.",
+            },
+            {
+                "criterion": "NT-proBNP >300 pg/mL",
+                "status": "MET",
+                "detail": "NT-proBNP = 1,200 pg/mL.",
+            },
+            {
+                "criterion": "Pregnancy",
+                "status": "NOT PRESENT",
+                "detail": "No pregnancy finding identified.",
+            },
+            {
+                "criterion": "eGFR <30",
+                "status": "NOT PRESENT",
+                "detail": "eGFR = 65 mL/min/1.73m².",
+            },
+        ]
+
+    if trial_id == "NCTFAKE001":
+
+        return [
+            {
+                "criterion": "Age ≥18",
+                "status": "MET",
+                "detail": "Patient is 65 years old.",
+            },
+            {
+                "criterion": "Type 2 diabetes",
+                "status": "UNKNOWN",
+                "detail": "No type 2 diabetes diagnosis documented.",
+            },
+            {
+                "criterion": "HbA1c 6.5–8.0%",
+                "status": "UNKNOWN",
+                "detail": "HbA1c value not available.",
+            },
+            {
+                "criterion": "Heart failure exclusion",
+                "status": "NOT PRESENT",
+                "detail": "No heart failure exclusion identified.",
+            },
+            {
+                "criterion": "Pregnancy",
+                "status": "NOT PRESENT",
+                "detail": "No pregnancy finding identified.",
+            },
+            {
+                "criterion": "eGFR <30",
+                "status": "NOT PRESENT",
+                "detail": "eGFR = 65 mL/min/1.73m².",
+            },
+        ]
+
+    return []
+
+
+# ============================================================
+# PATIENT NOT INTERESTED
+# ============================================================
+
+def save_patient_not_interested(
+    trial_id,
+    patient_id,
+    clinician_id,
+    encounter_id,
+    comment,
+):
+    """
+    Store a clinician's patient-not-interested response.
+
+    IMPORTANT:
+    This function DOES NOT create a research referral.
+    """
+
+    response = {
+        "response_id": (
+            f"PNI-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
+        ),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "event": "PATIENT_NOT_INTERESTED",
+        "trial_id": trial_id,
+        "patient_id": patient_id,
+        "clinician_id": clinician_id,
+        "encounter_id": encounter_id,
+        "comment": comment.strip(),
+        "source": "SMART_APP",
     }
+
+    PATIENT_NOT_INTERESTED_RESPONSES.append(response)
+
+    print(
+        "Patient Not Interested response saved:",
+        response,
+    )
+
+    return response
+
+
+# ============================================================
+# HTML HELPERS
+# ============================================================
+
+def criteria_html(criteria, kind="include"):
+
+    if kind == "include":
+        bullet_class = "include"
+    else:
+        bullet_class = "exclude"
+
+    output = ""
+
+    for criterion in criteria:
+
+        output += f"""
+        <li class="{bullet_class}">
+            {escape(criterion)}
+        </li>
+        """
+
+    return output
+
+
+def locations_html(locations):
+
+    output = ""
+
+    for location in locations:
+
+        output += f"""
+        <div class="location-item">
+            <span class="location-icon">📍</span>
+            <span>{escape(location)}</span>
+        </div>
+        """
+
+    return output
+
+
+def eligibility_html(eligibility):
+
+    if not eligibility:
+
+        return """
+        <div class="empty-state">
+            Eligibility details are not available in this prototype.
+        </div>
+        """
+
+    output = ""
+
+    for item in eligibility:
+
+        status = item.get("status", "UNKNOWN")
+
+        if status == "MET":
+            status_class = "met"
+            icon = "✓"
+
+        elif status == "NOT PRESENT":
+            status_class = "not-present"
+            icon = "✓"
+
+        elif status == "UNKNOWN":
+            status_class = "unknown"
+            icon = "?"
+
+        else:
+            status_class = "blocked"
+            icon = "!"
+
+        output += f"""
+        <div class="eligibility-row">
+
+            <div class="eligibility-icon {status_class}">
+                {icon}
+            </div>
+
+            <div class="eligibility-content">
+
+                <div class="eligibility-title">
+                    {escape(item.get("criterion"))}
+                </div>
+
+                <div class="eligibility-detail">
+                    {escape(item.get("detail"))}
+                </div>
+
+            </div>
+
+            <div class="eligibility-status {status_class}">
+                {escape(status)}
+            </div>
+
+        </div>
+        """
+
+    return output
 
 
 # ============================================================
@@ -419,230 +780,226 @@ def build_demo_eligibility(
     response_class=HTMLResponse,
 )
 async def referral_launch(
-    trial_id: str = Query(
-        default="NCTFAKE003"
-    ),
-    patient_id: str = Query(
-        default="helasync-test-001"
-    ),
-    clinician_id: str = Query(
-        default="Practitioner/test-clinician"
-    ),
-    encounter_id: str = Query(
-        default="encounter-test-001"
-    ),
-    hook_instance: str = Query(
-        default="helasync-stage3-test"
-    ),
+    trial_id: str = Query(...),
+    patient_id: str = Query(""),
+    clinician_id: str = Query(""),
+    encounter_id: str = Query(""),
+    hook_instance: str = Query(""),
+    message: str = Query(""),
 ):
 
-    trial = get_trial(
-        trial_id
-    )
+    trial_id = trial_id.strip().upper()
 
-    title = trial_value(
-        trial,
-        "trial_title",
-        "title",
-        default="Clinical Trial",
-    )
+    trial = get_trial(trial_id)
 
-    official_title = trial_value(
-        trial,
-        "official_title",
-        default="",
-    )
+    if trial is None:
 
-    status = trial_value(
-        trial,
-        "status",
-        default="Recruiting",
-    )
+        return HTMLResponse(
+            content=f"""
+            <html>
+            <head>
+                <title>HeLaSync - Trial Not Found</title>
+                <style>
+                    body {{
+                        font-family: Arial, sans-serif;
+                        padding: 50px;
+                        background: #f5f7fa;
+                    }}
 
-    phase = trial_value(
-        trial,
-        "phase",
-        default="Not specified",
-    )
+                    .error {{
+                        max-width: 700px;
+                        margin: auto;
+                        background: white;
+                        padding: 30px;
+                        border-radius: 12px;
+                        box-shadow: 0 4px 20px rgba(0,0,0,.08);
+                    }}
+                </style>
+            </head>
 
-    intervention = trial.get(
-        "intervention",
-        trial.get(
-            "interventions",
-            "Not specified",
-        ),
-    )
+            <body>
 
-    if isinstance(
-        intervention,
-        list,
-    ):
+                <div class="error">
 
-        intervention = ", ".join(
-            str(item)
-            for item in intervention
+                    <h1>Trial Not Found</h1>
+
+                    <p>
+                        HeLaSync could not find trial
+                        <strong>{escape(trial_id)}</strong>.
+                    </p>
+
+                    <p>
+                        Please return to the CDS Hooks card and try again.
+                    </p>
+
+                </div>
+
+            </body>
+            </html>
+            """,
+            status_code=404,
         )
 
-    if not intervention:
-        intervention = "Not specified"
-
-    disease_population = trial.get(
-        "disease_population",
-        trial.get(
-            "conditions",
-            "Not specified",
-        ),
+    display = build_trial_display_data(
+        trial_id,
+        trial,
     )
 
-    if isinstance(
-        disease_population,
-        list,
-    ):
+    eligibility = build_demo_eligibility(trial_id)
 
-        disease_population = ", ".join(
-            str(item)
-            for item in disease_population
-        )
+    # --------------------------------------------------------
+    # Referral POST URL
+    # --------------------------------------------------------
 
-    if not disease_population:
-        disease_population = "Not specified"
+    referral_form_url = "/referrals/from-cds"
 
-    objective = trial.get(
-        "study_objective",
-        trial.get(
-            "brief_summary",
-            trial_value(
-                trial,
-                "brief_summary",
-                default="Not specified",
-            ),
-        ),
-    )
+    # --------------------------------------------------------
+    # Patient Not Interested endpoint
+    # --------------------------------------------------------
 
-    study_duration = trial.get(
-        "study_duration",
-        "Not specified",
-    )
+    not_interested_url = "/patient-feedback/not-interested"
 
-    reimbursement = trial.get(
-        "reimbursement",
-        "Information not available",
-    )
+    # --------------------------------------------------------
+    # Success message
+    # --------------------------------------------------------
 
-    pi_name = trial.get(
-        "principal_investigator",
-        trial.get(
-            "pi_name",
-            "Not specified",
-        ),
-    )
+    success_message = ""
 
-    locations = get_locations(
-        trial
-    )
+    if message == "referred":
 
-    if locations:
+        success_message = """
+        <div class="success-banner">
+            <div class="success-icon">✓</div>
 
-        location_text = "<br>".join(
-            esc(
-                ", ".join(
-                    str(
-                        value
-                    )
-                    for value in [
-                        location.get(
-                            "facility"
-                        ),
-                        location.get(
-                            "city"
-                        ),
-                        location.get(
-                            "state"
-                        ),
-                    ]
-                    if value
-                )
-            )
-            for location in locations[:5]
-        )
-
-    else:
-
-        location_text = "Not specified"
-
-    eligibility = build_demo_eligibility(
-        trial_id
-    )
-
-    inclusion_rows = ""
-
-    for item in eligibility[
-        "inclusion"
-    ]:
-
-        inclusion_rows += f"""
-        <div class="criterion-row">
-            <div class="criterion-text">
-                {esc(item["criterion"])}
-            </div>
             <div>
-                {status_badge(item["result"])}
+                <strong>Referral submitted</strong>
+                <div>
+                    The patient has been added to the HeLaSync research referral queue.
+                </div>
             </div>
         </div>
         """
 
-    exclusion_rows = ""
+    elif message == "not-interested":
 
-    for item in eligibility[
-        "exclusion"
-    ]:
+        success_message = """
+        <div class="success-banner neutral">
+            <div class="success-icon">✓</div>
 
-        exclusion_rows += f"""
-        <div class="criterion-row">
-            <div class="criterion-text">
-                {esc(item["criterion"])}
-            </div>
             <div>
-                {status_badge(item["result"])}
+                <strong>Response saved</strong>
+                <div>
+                    The patient's decision was recorded. No research referral was created.
+                </div>
             </div>
         </div>
         """
 
-    if not inclusion_rows:
+    # --------------------------------------------------------
+    # Demo labels
+    # --------------------------------------------------------
 
-        inclusion_rows = """
-        <div class="empty-state">
-            Eligibility details will appear here when
-            verified criteria are available.
-        </div>
+    pi_demo_badge = ""
+
+    if display["pi_demo"]:
+
+        pi_demo_badge = """
+        <span class="demo-badge">
+            DEMO EXAMPLE
+        </span>
         """
 
-    if not exclusion_rows:
+    reimbursement_demo_badge = ""
 
-        exclusion_rows = """
-        <div class="empty-state">
-            No exclusion criteria have been loaded for
-            this prototype view.
-        </div>
+    if display["reimbursement_demo"]:
+
+        reimbursement_demo_badge = """
+        <span class="demo-badge">
+            DEMO EXAMPLE
+        </span>
         """
 
     # --------------------------------------------------------
-    # Preserve context for referral submission
+    # Refer form hidden fields
     # --------------------------------------------------------
 
-    referral_query = urlencode(
-        {
-            "trial_id": trial_id,
-            "patient_id": patient_id,
-            "clinician_id": clinician_id,
-            "encounter_id": encounter_id,
-            "hook_instance": hook_instance,
-        }
-    )
+    hidden_fields = f"""
+        <input
+            type="hidden"
+            name="trial_id"
+            value="{escape(trial_id)}"
+        />
+
+        <input
+            type="hidden"
+            name="patient_id"
+            value="{escape(patient_id)}"
+        />
+
+        <input
+            type="hidden"
+            name="clinician_id"
+            value="{escape(clinician_id)}"
+        />
+
+        <input
+            type="hidden"
+            name="encounter_id"
+            value="{escape(encounter_id)}"
+        />
+
+        <input
+            type="hidden"
+            name="hook_instance"
+            value="{escape(hook_instance)}"
+        />
+
+        <input
+            type="hidden"
+            name="source"
+            value="CDS_HOOKS"
+        />
+    """
 
     # --------------------------------------------------------
+    # Patient Not Interested hidden fields
+    # --------------------------------------------------------
+
+    not_interested_hidden = f"""
+        <input
+            type="hidden"
+            name="trial_id"
+            value="{escape(trial_id)}"
+        />
+
+        <input
+            type="hidden"
+            name="patient_id"
+            value="{escape(patient_id)}"
+        />
+
+        <input
+            type="hidden"
+            name="clinician_id"
+            value="{escape(clinician_id)}"
+        />
+
+        <input
+            type="hidden"
+            name="encounter_id"
+            value="{escape(encounter_id)}"
+        />
+
+        <input
+            type="hidden"
+            name="hook_instance"
+            value="{escape(hook_instance)}"
+        />
+    """
+
+    # ========================================================
     # HTML
-    # --------------------------------------------------------
+    # ========================================================
 
     page = f"""
 <!DOCTYPE html>
@@ -656,30 +1013,13 @@ async def referral_launch(
 <meta
     name="viewport"
     content="width=device-width, initial-scale=1.0"
->
+/>
 
 <title>
-    HeLaSync Clinical Trial Intelligence
+    HeLaSync Clinical Trial Information
 </title>
 
 <style>
-
-:root {{
-    --hs-blue: #155eef;
-    --hs-blue-dark: #0b4acb;
-    --hs-navy: #102a43;
-    --hs-text: #243b53;
-    --hs-muted: #627d98;
-    --hs-border: #d9e2ec;
-    --hs-background: #f7f9fc;
-    --hs-white: #ffffff;
-    --hs-green: #16803c;
-    --hs-green-bg: #e8f7ee;
-    --hs-yellow: #9a6700;
-    --hs-yellow-bg: #fff8e1;
-    --hs-red: #b42318;
-    --hs-red-bg: #fef3f2;
-}}
 
 * {{
     box-sizing: border-box;
@@ -687,33 +1027,25 @@ async def referral_launch(
 
 body {{
     margin: 0;
-    background: var(--hs-background);
-    color: var(--hs-text);
     font-family:
         -apple-system,
         BlinkMacSystemFont,
         "Segoe UI",
-        Roboto,
-        Helvetica,
         Arial,
         sans-serif;
+
+    background: #f4f7fb;
+    color: #172033;
 }}
 
 .header {{
-    background: var(--hs-white);
-    border-bottom: 1px solid var(--hs-border);
-    position: sticky;
-    top: 0;
-    z-index: 10;
-}}
+    background: #ffffff;
+    border-bottom: 1px solid #e2e8f0;
+    padding: 18px 32px;
 
-.header-inner {{
-    max-width: 1120px;
-    margin: auto;
-    padding: 18px 24px;
     display: flex;
-    align-items: center;
     justify-content: space-between;
+    align-items: center;
 }}
 
 .brand {{
@@ -723,321 +1055,534 @@ body {{
 }}
 
 .logo {{
-    width: 38px;
-    height: 38px;
+    width: 42px;
+    height: 42px;
     border-radius: 10px;
-    background: var(--hs-blue);
+
+    background: #173f5f;
     color: white;
+
     display: flex;
     align-items: center;
     justify-content: center;
+
     font-weight: 800;
     font-size: 18px;
 }}
 
-.brand-name {{
+.brand-title {{
+    font-weight: 800;
     font-size: 20px;
-    font-weight: 750;
-    color: var(--hs-navy);
 }}
 
 .brand-subtitle {{
+    color: #64748b;
     font-size: 12px;
-    color: var(--hs-muted);
+}}
+
+.header-badge {{
+    background: #eef6ff;
+    color: #1769aa;
+    border: 1px solid #cce5ff;
+    padding: 7px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 700;
 }}
 
 .container {{
     max-width: 1120px;
     margin: 0 auto;
-    padding: 32px 24px 60px;
-}}
-
-.back-link {{
-    color: var(--hs-blue);
-    text-decoration: none;
-    font-size: 14px;
-    font-weight: 600;
+    padding: 32px 22px 60px;
 }}
 
 .hero {{
-    margin-top: 18px;
-    background: var(--hs-white);
-    border: 1px solid var(--hs-border);
-    border-radius: 16px;
-    padding: 28px;
+    margin-bottom: 24px;
 }}
 
 .hero-label {{
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    background: var(--hs-green-bg);
-    color: var(--hs-green);
-    border-radius: 999px;
-    padding: 7px 12px;
-    font-size: 12px;
-    font-weight: 750;
+    color: #1769aa;
+    font-size: 13px;
+    font-weight: 800;
     text-transform: uppercase;
-    letter-spacing: .04em;
+    letter-spacing: .06em;
+    margin-bottom: 8px;
 }}
 
 .hero h1 {{
-    margin: 18px 0 8px;
-    font-size: 30px;
+    margin: 0 0 8px;
+    font-size: 32px;
     line-height: 1.2;
-    color: var(--hs-navy);
 }}
 
-.trial-id {{
-    color: var(--hs-muted);
-    font-size: 14px;
+.hero p {{
+    color: #64748b;
+    margin: 0;
+}}
+
+.card {{
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 16px;
+    padding: 24px;
+    margin-bottom: 20px;
+
+    box-shadow:
+        0 3px 12px rgba(15, 23, 42, .04);
+}}
+
+.card-header {{
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 20px;
+    margin-bottom: 20px;
+}}
+
+.card-title {{
+    font-size: 19px;
+    font-weight: 800;
+    margin: 0;
+}}
+
+.card-subtitle {{
+    color: #64748b;
+    font-size: 13px;
+    margin-top: 5px;
+}}
+
+.status {{
+    background: #ecfdf3;
+    color: #15803d;
+    border: 1px solid #bbf7d0;
+    border-radius: 20px;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 800;
 }}
 
 .grid {{
     display: grid;
-    grid-template-columns: 1.4fr .8fr;
-    gap: 20px;
-    margin-top: 20px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px;
 }}
 
-.card {{
-    background: var(--hs-white);
-    border: 1px solid var(--hs-border);
-    border-radius: 14px;
-    padding: 24px;
-}}
-
-.card h2 {{
-    margin: 0 0 18px;
-    font-size: 19px;
-    color: var(--hs-navy);
-}}
-
-.card h3 {{
-    margin: 24px 0 10px;
-    font-size: 15px;
-    color: var(--hs-navy);
-}}
-
-.summary-grid {{
+.grid-three {{
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 16px;
+    grid-template-columns:
+        repeat(3, minmax(0, 1fr));
+    gap: 18px;
 }}
 
-.summary-item {{
-    padding: 14px;
-    border: 1px solid var(--hs-border);
-    border-radius: 10px;
-    background: #fbfcfe;
+.info-box {{
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 16px;
 }}
 
-.summary-label {{
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: .05em;
-    color: var(--hs-muted);
+.info-label {{
+    color: #64748b;
+    font-size: 12px;
     font-weight: 700;
-    margin-bottom: 5px;
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
 }}
 
-.summary-value {{
+.info-value {{
+    font-size: 15px;
+    font-weight: 650;
+    line-height: 1.45;
+}}
+
+.demo-badge {{
+    display: inline-block;
+    margin-left: 7px;
+    background: #fff7ed;
+    color: #c2410c;
+    border: 1px solid #fed7aa;
+    border-radius: 12px;
+    padding: 2px 7px;
+    font-size: 10px;
+    font-weight: 800;
+    vertical-align: middle;
+}}
+
+.section-text {{
+    color: #475569;
+    line-height: 1.65;
     font-size: 14px;
-    line-height: 1.4;
 }}
 
-.criterion-row {{
+.criteria-list {{
+    margin: 0;
+    padding-left: 0;
+    list-style: none;
+}}
+
+.criteria-list li {{
+    padding: 10px 12px 10px 36px;
+    margin-bottom: 8px;
+    border-radius: 10px;
+    position: relative;
+    background: #f8fafc;
+    color: #334155;
+    line-height: 1.45;
+    font-size: 14px;
+}}
+
+.criteria-list li::before {{
+    position: absolute;
+    left: 13px;
+    top: 10px;
+    font-weight: 900;
+}}
+
+.criteria-list li.include::before {{
+    content: "✓";
+    color: #15803d;
+}}
+
+.criteria-list li.exclude::before {{
+    content: "!";
+    color: #dc2626;
+}}
+
+.location-item {{
     display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 20px;
-    padding: 14px 0;
-    border-bottom: 1px solid #edf1f5;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 12px;
+    background: #f8fafc;
+    border-radius: 10px;
+    margin-bottom: 8px;
+    color: #334155;
+    font-size: 14px;
 }}
 
-.criterion-row:last-child {{
+.location-icon {{
+    font-size: 16px;
+}}
+
+.eligibility-row {{
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 15px 0;
+    border-bottom: 1px solid #edf2f7;
+}}
+
+.eligibility-row:last-child {{
     border-bottom: none;
 }}
 
-.criterion-text {{
-    font-size: 14px;
-    line-height: 1.4;
-}}
+.eligibility-icon {{
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
 
-.status {{
-    display: inline-flex;
-    padding: 5px 9px;
-    border-radius: 999px;
-    font-size: 10px;
-    font-weight: 800;
-    white-space: nowrap;
-}}
-
-.status-met {{
-    color: var(--hs-green);
-    background: var(--hs-green-bg);
-}}
-
-.status-not-met {{
-    color: var(--hs-red);
-    background: var(--hs-red-bg);
-}}
-
-.status-unknown {{
-    color: var(--hs-yellow);
-    background: var(--hs-yellow-bg);
-}}
-
-.notice {{
-    background: #eef5ff;
-    border: 1px solid #c9dcff;
-    border-radius: 10px;
-    padding: 14px 16px;
-    color: #174ea6;
-    font-size: 13px;
-    line-height: 1.5;
-}}
-
-.referral-panel {{
-    margin-top: 20px;
-    background: var(--hs-navy);
-    color: white;
-    border-radius: 16px;
-    padding: 26px;
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 24px;
+    justify-content: center;
+
+    font-weight: 900;
+    flex-shrink: 0;
 }}
 
-.referral-panel h2 {{
-    color: white;
-    margin: 0 0 7px;
+.eligibility-icon.met,
+.eligibility-icon.not-present {{
+    background: #dcfce7;
+    color: #15803d;
 }}
 
-.referral-panel p {{
-    color: #d9e2ec;
-    margin: 0;
-    font-size: 13px;
-    line-height: 1.5;
+.eligibility-icon.unknown {{
+    background: #fef3c7;
+    color: #a16207;
 }}
 
-.primary-button {{
-    border: none;
-    border-radius: 9px;
-    padding: 13px 20px;
-    background: var(--hs-blue);
-    color: white;
-    font-size: 14px;
+.eligibility-icon.blocked {{
+    background: #fee2e2;
+    color: #b91c1c;
+}}
+
+.eligibility-content {{
+    flex: 1;
+}}
+
+.eligibility-title {{
     font-weight: 750;
+    font-size: 14px;
+}}
+
+.eligibility-detail {{
+    color: #64748b;
+    font-size: 12px;
+    margin-top: 3px;
+}}
+
+.eligibility-status {{
+    font-size: 11px;
+    font-weight: 800;
+    border-radius: 15px;
+    padding: 5px 9px;
+}}
+
+.eligibility-status.met,
+.eligibility-status.not-present {{
+    color: #15803d;
+    background: #f0fdf4;
+}}
+
+.eligibility-status.unknown {{
+    color: #a16207;
+    background: #fffbeb;
+}}
+
+.eligibility-status.blocked {{
+    color: #b91c1c;
+    background: #fef2f2;
+}}
+
+.actions {{
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+}}
+
+button,
+.button {{
+    border: none;
+    border-radius: 10px;
+    padding: 12px 18px;
+    font-size: 14px;
+    font-weight: 800;
     cursor: pointer;
     text-decoration: none;
-    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }}
 
-.primary-button:hover {{
-    background: var(--hs-blue-dark);
+.primary {{
+    background: #1769aa;
+    color: white;
 }}
 
-.secondary-button {{
-    border: 1px solid var(--hs-border);
-    border-radius: 9px;
-    padding: 12px 18px;
+.primary:hover {{
+    background: #12578e;
+}}
+
+.secondary {{
+    background: #ffffff;
+    color: #334155;
+    border: 1px solid #cbd5e1;
+}}
+
+.secondary:hover {{
+    background: #f8fafc;
+}}
+
+.danger {{
+    background: #ffffff;
+    color: #b91c1c;
+    border: 1px solid #fecaca;
+}}
+
+.danger:hover {{
+    background: #fff7f7;
+}}
+
+.success-banner {{
+    display: flex;
+    align-items: center;
+    gap: 13px;
+
+    background: #ecfdf3;
+    border: 1px solid #bbf7d0;
+    color: #166534;
+
+    padding: 15px 18px;
+    border-radius: 12px;
+
+    margin-bottom: 20px;
+}}
+
+.success-banner.neutral {{
+    background: #eff6ff;
+    border-color: #bfdbfe;
+    color: #1e40af;
+}}
+
+.success-icon {{
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
     background: white;
-    color: var(--hs-text);
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    font-weight: 900;
+}}
+
+.next-step {{
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+}}
+
+.step-number {{
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: #e0f2fe;
+    color: #0369a1;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    font-weight: 900;
+    flex-shrink: 0;
+}}
+
+.step-text {{
+    color: #475569;
+    line-height: 1.55;
     font-size: 14px;
-    font-weight: 650;
-    cursor: pointer;
 }}
 
 .modal {{
     display: none;
     position: fixed;
     inset: 0;
-    background: rgba(16, 42, 67, .45);
-    z-index: 100;
+
+    background: rgba(15, 23, 42, .55);
+
     align-items: center;
     justify-content: center;
+
     padding: 20px;
+
+    z-index: 1000;
 }}
 
-.modal-content {{
-    width: 100%;
-    max-width: 540px;
+.modal.open {{
+    display: flex;
+}}
+
+.modal-card {{
     background: white;
     border-radius: 16px;
+    width: min(600px, 100%);
     padding: 26px;
-    box-shadow: 0 20px 60px rgba(0,0,0,.2);
+
+    box-shadow:
+        0 20px 60px rgba(0,0,0,.2);
 }}
 
-.modal-content h2 {{
-    margin-top: 0;
-    color: var(--hs-navy);
+.modal-title {{
+    font-size: 21px;
+    font-weight: 800;
+    margin-bottom: 7px;
 }}
 
-.form-row {{
-    margin-bottom: 14px;
+.modal-description {{
+    color: #64748b;
+    font-size: 14px;
+    line-height: 1.55;
+    margin-bottom: 20px;
 }}
 
-.form-row label {{
-    display: block;
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--hs-muted);
-    margin-bottom: 6px;
-}}
-
-.form-row input {{
+textarea {{
     width: 100%;
-    padding: 11px 12px;
-    border: 1px solid var(--hs-border);
-    border-radius: 8px;
+    min-height: 130px;
+    resize: vertical;
+
+    border: 1px solid #cbd5e1;
+    border-radius: 10px;
+
+    padding: 12px;
+
+    font-family: inherit;
     font-size: 14px;
 }}
 
-.modal-actions {{
+textarea:focus {{
+    outline: none;
+    border-color: #1769aa;
+    box-shadow: 0 0 0 3px rgba(23,105,170,.1);
+}}
+
+.form-actions {{
     display: flex;
     justify-content: flex-end;
     gap: 10px;
-    margin-top: 22px;
+    margin-top: 15px;
+}}
+
+.warning {{
+    background: #fff7ed;
+    border: 1px solid #fed7aa;
+    border-radius: 12px;
+    padding: 14px 16px;
+
+    color: #9a3412;
+    font-size: 12px;
+    line-height: 1.55;
 }}
 
 .footer {{
-    max-width: 1120px;
-    margin: 0 auto;
-    padding: 0 24px 40px;
-    color: var(--hs-muted);
-    font-size: 12px;
     text-align: center;
+    color: #94a3b8;
+    font-size: 11px;
+    padding: 25px 0;
 }}
 
 .empty-state {{
-    color: var(--hs-muted);
-    font-size: 13px;
-    padding: 14px 0;
+    color: #64748b;
+    padding: 20px;
+    text-align: center;
+    background: #f8fafc;
+    border-radius: 10px;
 }}
 
 @media (max-width: 800px) {{
 
-    .grid {{
+    .grid,
+    .grid-three {{
         grid-template-columns: 1fr;
     }}
 
-    .summary-grid {{
-        grid-template-columns: 1fr;
-    }}
-
-    .referral-panel {{
-        flex-direction: column;
-        align-items: flex-start;
-    }}
-
-    .hero h1 {{
-        font-size: 24px;
+    .header {{
+        padding: 15px 18px;
     }}
 
     .container {{
-        padding: 20px 16px 40px;
+        padding: 24px 15px 45px;
+    }}
+
+    .hero h1 {{
+        font-size: 26px;
+    }}
+
+    .card {{
+        padding: 18px;
+    }}
+
+    .card-header {{
+        flex-direction: column;
+    }}
+
+    .actions {{
+        flex-direction: column;
+    }}
+
+    button,
+    .button {{
+        width: 100%;
     }}
 
 }}
@@ -1046,539 +1591,812 @@ body {{
 
 </head>
 
+
 <body>
+
+
+<!-- ===================================================== -->
+<!-- HEADER -->
+<!-- ===================================================== -->
 
 <header class="header">
 
-    <div class="header-inner">
+    <div class="brand">
 
-        <div class="brand">
+        <div class="logo">
+            HS
+        </div>
 
-            <div class="logo">
-                H
+        <div>
+
+            <div class="brand-title">
+                HeLaSync
             </div>
 
-            <div>
-
-                <div class="brand-name">
-                    HeLaSync
-                </div>
-
-                <div class="brand-subtitle">
-                    Clinical Trial Intelligence
-                </div>
-
+            <div class="brand-subtitle">
+                Clinical Trial Referral Platform
             </div>
 
         </div>
 
-        <div class="brand-subtitle">
-            Clinician Smart App
-        </div>
+    </div>
 
+
+    <div class="header-badge">
+        Clinician View
     </div>
 
 </header>
 
 
-<main class="container">
+<!-- ===================================================== -->
+<!-- MAIN -->
+<!-- ===================================================== -->
 
-    <a
-        class="back-link"
-        href="javascript:history.back()"
-    >
-        ← Return to EHR
-    </a>
+<main class="container">
 
 
     <section class="hero">
 
         <div class="hero-label">
-            ● Potential Clinical Trial Match
+            Potential Clinical Trial Match
         </div>
 
         <h1>
-            {esc(title)}
+            {escape(display["trial_name"])}
         </h1>
 
-        <div class="trial-id">
-            {esc(trial_id)}
+        <p>
+            Review the study information and determine whether
+            the patient should be referred to the research team.
+        </p>
+
+    </section>
+
+
+    {success_message}
+
+
+    <!-- ================================================= -->
+    <!-- TRIAL OVERVIEW -->
+    <!-- ================================================= -->
+
+    <section class="card">
+
+        <div class="card-header">
+
+            <div>
+
+                <h2 class="card-title">
+                    Trial Overview
+                </h2>
+
+                <div class="card-subtitle">
+                    {escape(trial_id)}
+                </div>
+
+            </div>
+
+            <div class="status">
+                {escape(display["status"])}
+            </div>
+
+        </div>
+
+
+        <div class="grid">
+
+            <div class="info-box">
+
+                <div class="info-label">
+                    Trial Name
+                </div>
+
+                <div class="info-value">
+                    {escape(display["trial_name"])}
+                </div>
+
+            </div>
+
+
+            <div class="info-box">
+
+                <div class="info-label">
+                    Principal Investigator
+                </div>
+
+                <div class="info-value">
+
+                    {escape(display["pi_name"])}
+
+                    {pi_demo_badge}
+
+                </div>
+
+            </div>
+
+
+            <div class="info-box">
+
+                <div class="info-label">
+                    Disease Population
+                </div>
+
+                <div class="info-value">
+                    {escape(display["disease_population"])}
+                </div>
+
+            </div>
+
+
+            <div class="info-box">
+
+                <div class="info-label">
+                    Study Duration
+                </div>
+
+                <div class="info-value">
+                    {escape(display["study_duration"])}
+                </div>
+
+            </div>
+
         </div>
 
     </section>
 
 
-    <div class="grid">
+    <!-- ================================================= -->
+    <!-- STUDY SNAPSHOT -->
+    <!-- ================================================= -->
 
+    <section class="card">
 
-        <!-- ==================================================
-             TRIAL OVERVIEW
-             ================================================== -->
+        <div class="card-header">
 
-        <section class="card">
+            <div>
 
-            <h2>
-                Trial Overview
-            </h2>
+                <h2 class="card-title">
+                    Study Snapshot
+                </h2>
 
-            <div class="summary-grid">
-
-                <div class="summary-item">
-
-                    <div class="summary-label">
-                        Study Phase
-                    </div>
-
-                    <div class="summary-value">
-                        {esc(phase)}
-                    </div>
-
+                <div class="card-subtitle">
+                    High-level information for clinician review
                 </div>
 
+            </div>
 
-                <div class="summary-item">
+        </div>
 
-                    <div class="summary-label">
-                        Recruitment Status
-                    </div>
 
-                    <div class="summary-value">
-                        {esc(status)}
-                    </div>
+        <p class="section-text">
 
+            {escape(display["study_summary"])}
+
+        </p>
+
+    </section>
+
+
+    <!-- ================================================= -->
+    <!-- STUDY GOALS -->
+    <!-- ================================================= -->
+
+    <section class="card">
+
+        <div class="card-header">
+
+            <div>
+
+                <h2 class="card-title">
+                    Goals & Objective
+                </h2>
+
+                <div class="card-subtitle">
+                    What the study is designed to evaluate
                 </div>
 
+            </div>
 
-                <div class="summary-item">
+        </div>
 
-                    <div class="summary-label">
-                        Intervention
-                    </div>
 
-                    <div class="summary-value">
-                        {esc(intervention)}
-                    </div>
+        <p class="section-text">
 
+            {escape(display["study_objective"])}
+
+        </p>
+
+    </section>
+
+
+    <!-- ================================================= -->
+    <!-- STUDY DETAILS -->
+    <!-- ================================================= -->
+
+    <section class="card">
+
+        <div class="card-header">
+
+            <div>
+
+                <h2 class="card-title">
+                    Study Details
+                </h2>
+
+            </div>
+
+        </div>
+
+
+        <div class="grid-three">
+
+
+            <div class="info-box">
+
+                <div class="info-label">
+                    Intervention
                 </div>
 
+                <div class="info-value">
+                    {escape(display["intervention"])}
+                </div>
 
-                <div class="summary-item">
+            </div>
 
-                    <div class="summary-label">
-                        Disease Population
-                    </div>
 
-                    <div class="summary-value">
-                        {esc(disease_population)}
-                    </div>
+            <div class="info-box">
+
+                <div class="info-label">
+                    Study Duration
+                </div>
+
+                <div class="info-value">
+                    {escape(display["study_duration"])}
+                </div>
+
+            </div>
+
+
+            <div class="info-box">
+
+                <div class="info-label">
+                    Participant Reimbursement
+                </div>
+
+                <div class="info-value">
+
+                    {escape(display["reimbursement"])}
+
+                    {reimbursement_demo_badge}
 
                 </div>
 
             </div>
 
 
-            <h3>
-                Study Objective
-            </h3>
+        </div>
 
-            <div class="summary-value">
-                {esc(objective)}
+    </section>
+
+
+    <!-- ================================================= -->
+    <!-- ELIGIBILITY -->
+    <!-- ================================================= -->
+
+    <section class="card">
+
+        <div class="card-header">
+
+            <div>
+
+                <h2 class="card-title">
+                    Eligibility Review
+                </h2>
+
+                <div class="card-subtitle">
+                    Prototype eligibility assessment
+                </div>
+
             </div>
 
-            {
-                f'''
-                <h3>
-                    Official Study Title
+        </div>
+
+
+        <div class="warning">
+
+            <strong>Prototype notice:</strong>
+
+            This eligibility display is currently using
+            synthetic/demo patient data. Agent 4 should remain
+            the source of truth for production eligibility
+            determination.
+
+        </div>
+
+
+        <div style="height:16px;"></div>
+
+
+        {eligibility_html(eligibility)}
+
+    </section>
+
+
+    <!-- ================================================= -->
+    <!-- INCLUSION / EXCLUSION -->
+    <!-- ================================================= -->
+
+    <section class="card">
+
+        <div class="card-header">
+
+            <div>
+
+                <h2 class="card-title">
+                    Protocol Criteria
+                </h2>
+
+                <div class="card-subtitle">
+                    Key inclusion and exclusion criteria
+                </div>
+
+            </div>
+
+        </div>
+
+
+        <div class="grid">
+
+
+            <div>
+
+                <h3 style="font-size:15px;">
+                    Key Inclusion Criteria
                 </h3>
 
-                <div class="summary-value">
-                    {esc(official_title)}
+                <ul class="criteria-list">
+
+                    {criteria_html(
+                        display["inclusion_criteria"],
+                        "include"
+                    )}
+
+                </ul>
+
+            </div>
+
+
+            <div>
+
+                <h3 style="font-size:15px;">
+                    Key Exclusion Criteria
+                </h3>
+
+                <ul class="criteria-list">
+
+                    {criteria_html(
+                        display["exclusion_criteria"],
+                        "exclude"
+                    )}
+
+                </ul>
+
+            </div>
+
+
+        </div>
+
+    </section>
+
+
+    <!-- ================================================= -->
+    <!-- LOCATIONS -->
+    <!-- ================================================= -->
+
+    <section class="card">
+
+        <div class="card-header">
+
+            <div>
+
+                <h2 class="card-title">
+                    Study Locations
+                </h2>
+
+                <div class="card-subtitle">
+                    Research sites participating in the study
                 </div>
-                '''
-                if official_title
-                else ""
-            }
 
-        </section>
+            </div>
+
+        </div>
 
 
-        <!-- ==================================================
-             PATIENT CONTEXT
-             ================================================== -->
+        {locations_html(display["locations"])}
 
-        <section class="card">
+    </section>
 
-            <h2>
-                Patient Context
-            </h2>
 
-            <div class="summary-item">
+    <!-- ================================================= -->
+    <!-- PATIENT CONTEXT -->
+    <!-- ================================================= -->
 
-                <div class="summary-label">
+    <section class="card">
+
+        <div class="card-header">
+
+            <div>
+
+                <h2 class="card-title">
+                    Patient Context
+                </h2>
+
+                <div class="card-subtitle">
+                    Information associated with this CDS Hooks launch
+                </div>
+
+            </div>
+
+        </div>
+
+
+        <div class="grid">
+
+
+            <div class="info-box">
+
+                <div class="info-label">
                     Patient
                 </div>
 
-                <div class="summary-value">
-                    {esc(patient_id)}
+                <div class="info-value">
+                    {escape(patient_id or "Not provided")}
                 </div>
 
             </div>
 
-            <br>
 
-            <div class="summary-item">
+            <div class="info-box">
 
-                <div class="summary-label">
+                <div class="info-label">
                     Clinician
                 </div>
 
-                <div class="summary-value">
-                    {esc(clinician_id)}
+                <div class="info-value">
+                    {escape(clinician_id or "Not provided")}
                 </div>
 
             </div>
 
-            <br>
 
-            <div class="notice">
+            <div class="info-box">
 
-                This Smart App displays information associated
-                with the CDS Hooks trial match. The automated
-                assessment is preliminary and does not represent
-                enrollment or final eligibility determination.
+                <div class="info-label">
+                    Encounter
+                </div>
+
+                <div class="info-value">
+                    {escape(encounter_id or "Not provided")}
+                </div>
 
             </div>
 
-        </section>
 
+            <div class="info-box">
 
-    </div>
+                <div class="info-label">
+                    Source
+                </div>
 
+                <div class="info-value">
+                    CDS Hooks / HeLaSync
+                </div>
 
-    <!-- ======================================================
-         WHY PATIENT MATCHED
-         ====================================================== -->
+            </div>
 
-    <section
-        class="card"
-        style="margin-top:20px;"
-    >
-
-        <h2>
-            Why This Patient Matched
-        </h2>
-
-        <div class="notice">
-
-            HeLaSync identified this trial because the patient's
-            available clinical information aligns with the
-            documented trial population and eligibility criteria.
-
-            <br><br>
-
-            <strong>
-                HeLaSync does not use a simple percentage score
-                to determine eligibility.
-            </strong>
-
-            Criteria are reviewed individually and may be
-            classified as met, not met, or unknown.
 
         </div>
 
     </section>
 
 
-    <!-- ======================================================
-         ELIGIBILITY REVIEW
-         ====================================================== -->
+    <!-- ================================================= -->
+    <!-- WHAT HAPPENS NEXT -->
+    <!-- ================================================= -->
 
-    <section
-        class="card"
-        style="margin-top:20px;"
-    >
+    <section class="card">
 
-        <h2>
-            Eligibility Review
-        </h2>
+        <div class="card-header">
 
-        <h3>
-            Inclusion Criteria
-        </h3>
+            <div>
 
-        {inclusion_rows}
-
-
-        <h3>
-            Exclusion Criteria
-        </h3>
-
-        {exclusion_rows}
-
-    </section>
-
-
-    <!-- ======================================================
-         STUDY DETAILS
-         ====================================================== -->
-
-    <div class="grid">
-
-        <section class="card">
-
-            <h2>
-                Study Details
-            </h2>
-
-            <div class="summary-grid">
-
-                <div class="summary-item">
-
-                    <div class="summary-label">
-                        Principal Investigator
-                    </div>
-
-                    <div class="summary-value">
-                        {esc(pi_name)}
-                    </div>
-
-                </div>
-
-
-                <div class="summary-item">
-
-                    <div class="summary-label">
-                        Study Duration
-                    </div>
-
-                    <div class="summary-value">
-                        {esc(study_duration)}
-                    </div>
-
-                </div>
-
-
-                <div class="summary-item">
-
-                    <div class="summary-label">
-                        Location
-                    </div>
-
-                    <div class="summary-value">
-                        {location_text}
-                    </div>
-
-                </div>
-
-
-                <div class="summary-item">
-
-                    <div class="summary-label">
-                        Reimbursement
-                    </div>
-
-                    <div class="summary-value">
-                        {esc(reimbursement)}
-                    </div>
-
-                </div>
+                <h2 class="card-title">
+                    What Happens Next?
+                </h2>
 
             </div>
-
-        </section>
-
-
-        <section class="card">
-
-            <h2>
-                What Happens Next
-            </h2>
-
-            <div class="criterion-row">
-
-                <div class="criterion-text">
-                    1. Clinician reviews trial information
-                </div>
-
-            </div>
-
-            <div class="criterion-row">
-
-                <div class="criterion-text">
-                    2. Clinician discusses the opportunity
-                    with the patient
-                </div>
-
-            </div>
-
-            <div class="criterion-row">
-
-                <div class="criterion-text">
-                    3. Clinician submits referral if appropriate
-                </div>
-
-            </div>
-
-            <div class="criterion-row">
-
-                <div class="criterion-text">
-                    4. Research team reviews the referral
-                </div>
-
-            </div>
-
-        </section>
-
-    </div>
-
-
-    <!-- ======================================================
-         REFERRAL ACTION
-         ====================================================== -->
-
-    <section class="referral-panel">
-
-        <div>
-
-            <h2>
-                Ready to refer this patient?
-            </h2>
-
-            <p>
-                Submitting a referral indicates patient interest.
-                It does not constitute trial enrollment or final
-                eligibility confirmation.
-            </p>
 
         </div>
 
 
-        <button
-            class="primary-button"
-            onclick="openReferralModal()"
-        >
-            Refer Patient
-        </button>
+        <div class="next-step">
+
+            <div class="step-number">
+                1
+            </div>
+
+            <div class="step-text">
+
+                <strong>Refer Patient</strong>
+
+                <br>
+
+                If the patient is interested, select
+                <strong>Refer Patient</strong> below.
+
+            </div>
+
+        </div>
+
+
+        <div style="height:15px;"></div>
+
+
+        <div class="next-step">
+
+            <div class="step-number">
+                2
+            </div>
+
+            <div class="step-text">
+
+                HeLaSync records the research referral and
+                routes the referral to the appropriate
+                research team.
+
+            </div>
+
+        </div>
+
+
+        <div style="height:15px;"></div>
+
+
+        <div class="next-step">
+
+            <div class="step-number">
+                3
+            </div>
+
+            <div class="step-text">
+
+                The research team can review the referral
+                and proceed with the appropriate screening
+                workflow.
+
+            </div>
+
+        </div>
+
 
     </section>
+
+
+    <!-- ================================================= -->
+    <!-- ACTIONS -->
+    <!-- ================================================= -->
+
+    <section class="card">
+
+        <div class="card-header">
+
+            <div>
+
+                <h2 class="card-title">
+                    Patient Decision
+                </h2>
+
+                <div class="card-subtitle">
+                    Record the patient's decision regarding research participation
+                </div>
+
+            </div>
+
+        </div>
+
+
+        <div class="actions">
+
+
+            <!-- REFER PATIENT -->
+
+            <form
+                method="POST"
+                action="{referral_form_url}"
+                style="display:inline;"
+            >
+
+                {hidden_fields}
+
+                <button
+                    type="submit"
+                    class="primary"
+                >
+                    Refer Patient
+                </button>
+
+            </form>
+
+
+            <!-- PATIENT NOT INTERESTED -->
+
+            <button
+                type="button"
+                class="danger"
+                onclick="openNotInterested()"
+            >
+                Patient Not Interested
+            </button>
+
+
+            <!-- CLOSE -->
+
+            <a
+                href="/"
+                class="button secondary"
+            >
+                Close
+            </a>
+
+
+        </div>
+
+
+        <div style="margin-top:15px;">
+
+            <div class="warning">
+
+                <strong>Important:</strong>
+
+                Selecting
+                <strong>Patient Not Interested</strong>
+                records the patient's decision and clinician
+                comment only. It does
+                <strong>not</strong>
+                create a research referral.
+
+            </div>
+
+        </div>
+
+    </section>
+
+
+    <!-- ================================================= -->
+    <!-- DASHBOARD -->
+    <!-- ================================================= -->
+
+    <section class="card">
+
+        <div class="actions">
+
+            <a
+                href="/research/referrals"
+                class="button secondary"
+            >
+                Open Research Referral Dashboard
+            </a>
+
+        </div>
+
+    </section>
+
+
+    <!-- ================================================= -->
+    <!-- PROTOTYPE NOTICE -->
+    <!-- ================================================= -->
+
+    <div class="footer">
+
+        HeLaSync Clinical Trial Matching Prototype
+
+        <br><br>
+
+        This Smart App is a prototype and is not currently
+        a production SMART-on-FHIR application.
+
+        <br>
+
+        Clinical trial eligibility should be confirmed
+        according to the official study protocol and
+        appropriate research-site screening procedures.
+
+    </div>
+
 
 </main>
 
 
-<footer class="footer">
-
-    HeLaSync Clinical Trial Intelligence
-
-    <br>
-
-    Preliminary automated assessment — research team
-    verification required.
-
-</footer>
-
-
-<!-- ========================================================
-     REFERRAL MODAL
-     ======================================================== -->
+<!-- ===================================================== -->
+<!-- PATIENT NOT INTERESTED MODAL -->
+<!-- ===================================================== -->
 
 <div
-    id="referralModal"
+    id="notInterestedModal"
     class="modal"
 >
 
-    <div class="modal-content">
+    <div class="modal-card">
 
-        <h2>
-            Confirm Patient Referral
-        </h2>
-
-        <p>
-            You are referring this patient to:
-        </p>
-
-        <div class="summary-item">
-
-            <strong>
-                {esc(title)}
-            </strong>
-
-            <br>
-
-            <span class="trial-id">
-                {esc(trial_id)}
-            </span>
-
+        <div class="modal-title">
+            Patient Not Interested
         </div>
 
-        <br>
 
-        <div class="notice">
+        <div class="modal-description">
 
-            By submitting, you are indicating that the patient
-            is interested in learning more about the study.
+            Please document why the patient was not interested
+            in participating in this clinical trial.
 
             <br><br>
 
-            This action does not enroll the patient or establish
-            final trial eligibility.
+            This response will be saved for HeLaSync workflow
+            and quality-improvement purposes. It will not create
+            a research referral.
 
         </div>
 
 
         <form
-            method="post"
-            action="/referrals/from-cds"
+            method="POST"
+            action="{not_interested_url}"
         >
 
-            <input
-                type="hidden"
-                name="trial_id"
-                value="{esc(trial_id)}"
+            {not_interested_hidden}
+
+
+            <label
+                for="comment"
+                style="
+                    display:block;
+                    font-weight:800;
+                    font-size:13px;
+                    margin-bottom:7px;
+                "
             >
-
-            <input
-                type="hidden"
-                name="patient_id"
-                value="{esc(patient_id)}"
-            >
-
-            <input
-                type="hidden"
-                name="clinician_id"
-                value="{esc(clinician_id)}"
-            >
-
-            <input
-                type="hidden"
-                name="encounter_id"
-                value="{esc(encounter_id)}"
-            >
-
-            <input
-                type="hidden"
-                name="hook_instance"
-                value="{esc(hook_instance)}"
-            >
+                Clinician Comment
+            </label>
 
 
-            <div class="modal-actions">
+            <textarea
+                id="comment"
+                name="comment"
+                required
+                placeholder="Example: Patient declined because of time commitment..."
+            ></textarea>
+
+
+            <div class="form-actions">
 
                 <button
                     type="button"
-                    class="secondary-button"
-                    onclick="closeReferralModal()"
+                    class="secondary"
+                    onclick="closeNotInterested()"
                 >
                     Cancel
                 </button>
 
+
                 <button
                     type="submit"
-                    class="primary-button"
+                    class="danger"
                 >
-                    Submit Referral
+                    Save Response
                 </button>
 
             </div>
+
 
         </form>
 
@@ -1589,394 +2407,215 @@ body {{
 
 <script>
 
-function openReferralModal() {{
-
-    document.getElementById(
-        "referralModal"
-    ).style.display = "flex";
-
-}}
-
-function closeReferralModal() {{
-
-    document.getElementById(
-        "referralModal"
-    ).style.display = "none";
-
-}}
-
-window.onclick = function(event) {{
+function openNotInterested() {{
 
     const modal =
         document.getElementById(
-            "referralModal"
+            "notInterestedModal"
         );
 
-    if (event.target === modal) {{
+    modal.classList.add("open");
 
-        closeReferralModal();
+    setTimeout(function() {{
 
-    }}
+        const textarea =
+            document.getElementById("comment");
+
+        if (textarea) {{
+            textarea.focus();
+        }}
+
+    }}, 100);
 
 }}
 
+
+function closeNotInterested() {{
+
+    const modal =
+        document.getElementById(
+            "notInterestedModal"
+        );
+
+    modal.classList.remove("open");
+
+}}
+
+
+document
+    .getElementById("notInterestedModal")
+    .addEventListener(
+        "click",
+        function(event) {{
+
+            if (
+                event.target === this
+            ) {{
+                closeNotInterested();
+            }}
+
+        }}
+    );
+
+
+document.addEventListener(
+    "keydown",
+    function(event) {{
+
+        if (event.key === "Escape") {{
+            closeNotInterested();
+        }}
+
+    }}
+);
+
 </script>
+
 
 </body>
 
 </html>
 """
 
-    return HTMLResponse(
-        content=page
-    )
+    return HTMLResponse(content=page)
 
 
 # ============================================================
-# REFERRAL SUBMISSION FROM SMART APP
+# REFER PATIENT
 # ============================================================
 
 @router.post(
-    "/referrals/from-cds",
-    response_class=HTMLResponse,
+    "/referrals/from-cds"
 )
 async def referral_from_cds(
     trial_id: str = Form(...),
     patient_id: str = Form(...),
-    clinician_id: str = Form(...),
-    encounter_id: str = Form(...),
-    hook_instance: str = Form(
-        default="helasync-smart-app"
-    ),
+    clinician_id: str = Form(""),
+    encounter_id: str = Form(""),
+    hook_instance: str = Form(""),
+    source: str = Form("CDS_HOOKS"),
 ):
 
-    # --------------------------------------------------------
-    # Create referral using the existing referral engine.
-    # Duplicate protection remains inside referral.py.
-    # --------------------------------------------------------
+    """
+    Create the actual HeLaSync research referral.
 
-    try:
+    This is the ONLY action in this Smart App that creates
+    a research referral.
+    """
 
-        referral = create_referral(
+    trial_id = trial_id.strip().upper()
 
-            trial_id=trial_id,
+    referral = create_referral(
+        trial_id=trial_id,
+        patient_id=patient_id,
+        clinician_id=clinician_id,
+        encounter_id=encounter_id or hook_instance,
+        source=source,
+        patient_data={
+            "hook_instance": hook_instance,
+            "source": "HeLaSync Smart App",
+        },
+    )
 
-            patient_id=patient_id,
+    params = urlencode(
+        {
+            "trial_id": trial_id,
+            "patient_id": patient_id,
+            "clinician_id": clinician_id,
+            "encounter_id": encounter_id,
+            "hook_instance": hook_instance,
+            "message": "referred",
+        }
+    )
 
-            clinician_id=clinician_id,
+    return RedirectResponse(
+        url=f"/referral-launch?{params}",
+        status_code=303,
+    )
 
-            encounter_id=encounter_id,
 
-            patient_data={
+# ============================================================
+# PATIENT NOT INTERESTED
+# ============================================================
+
+@router.post(
+    "/patient-feedback/not-interested"
+)
+async def patient_not_interested(
+    trial_id: str = Form(...),
+    patient_id: str = Form(""),
+    clinician_id: str = Form(""),
+    encounter_id: str = Form(""),
+    hook_instance: str = Form(""),
+    comment: str = Form(...),
+):
+
+    """
+    Save a Patient Not Interested response.
+
+    IMPORTANT:
+    This endpoint DOES NOT call create_referral().
+    Therefore it does NOT create a research referral.
+    """
+
+    comment = comment.strip()
+
+    if not comment:
+
+        params = urlencode(
+            {
+                "trial_id": trial_id,
+                "patient_id": patient_id,
+                "clinician_id": clinician_id,
+                "encounter_id": encounter_id,
                 "hook_instance": hook_instance,
-                "source": "HeLaSync Smart App",
-            },
-
+            }
         )
 
-    except TypeError:
-
-        # Compatibility fallback for an earlier version of
-        # create_referral() that did not accept patient_data.
-
-        referral = create_referral(
-
-            trial_id=trial_id,
-
-            patient_id=patient_id,
-
-            clinician_id=clinician_id,
-
-            encounter_id=encounter_id,
-
+        return RedirectResponse(
+            url=f"/referral-launch?{params}",
+            status_code=303,
         )
 
-    except Exception as e:
-
-        return HTMLResponse(
-            content=f"""
-<!DOCTYPE html>
-
-<html>
-
-<head>
-
-<title>
-HeLaSync Referral Error
-</title>
-
-<style>
-
-body {{
-    font-family:
-        -apple-system,
-        BlinkMacSystemFont,
-        "Segoe UI",
-        sans-serif;
-    background: #f7f9fc;
-    padding: 40px;
-    color: #243b53;
-}}
-
-.box {{
-    max-width: 650px;
-    margin: 80px auto;
-    background: white;
-    padding: 32px;
-    border-radius: 16px;
-    border: 1px solid #d9e2ec;
-}}
-
-h1 {{
-    color: #102a43;
-}}
-
-.error {{
-    background: #fef3f2;
-    color: #b42318;
-    padding: 14px;
-    border-radius: 8px;
-}}
-
-a {{
-    color: #155eef;
-    font-weight: 700;
-}}
-
-</style>
-
-</head>
-
-<body>
-
-<div class="box">
-
-<h1>
-Referral Could Not Be Submitted
-</h1>
-
-<div class="error">
-{esc(str(e))}
-</div>
-
-<br>
-
-<a href="javascript:history.back()">
-← Return to Smart App
-</a>
-
-</div>
-
-</body>
-
-</html>
-""",
-            status_code=500,
-        )
-
-    # --------------------------------------------------------
-    # Determine whether duplicate protection returned an
-    # existing referral.
-    # --------------------------------------------------------
-
-    duplicate_prevented = bool(
-        referral.get(
-            "duplicate_prevented",
-            False,
-        )
+    save_patient_not_interested(
+        trial_id=trial_id.strip().upper(),
+        patient_id=patient_id,
+        clinician_id=clinician_id,
+        encounter_id=encounter_id or hook_instance,
+        comment=comment,
     )
 
-    referral_id = referral.get(
-        "referral_id",
-        "Unknown",
+    params = urlencode(
+        {
+            "trial_id": trial_id,
+            "patient_id": patient_id,
+            "clinician_id": clinician_id,
+            "encounter_id": encounter_id,
+            "hook_instance": hook_instance,
+            "message": "not-interested",
+        }
     )
 
-    research_dashboard_url = (
-        RESEARCH_DASHBOARD_URL
+    return RedirectResponse(
+        url=f"/referral-launch?{params}",
+        status_code=303,
     )
 
-    status_message = (
-        "This patient already has a referral for this "
-        "trial. No duplicate referral was created."
-        if duplicate_prevented
-        else
-        "The referral has been created and is now available "
-        "to the HeLaSync research workflow."
-    )
 
-    return HTMLResponse(
-        content=f"""
-<!DOCTYPE html>
+# ============================================================
+# OPTIONAL DEBUG ENDPOINT
+# ============================================================
 
-<html lang="en">
+@router.get(
+    "/patient-feedback/not-interested"
+)
+async def get_patient_not_interested():
 
-<head>
+    """
+    Prototype-only endpoint allowing the stored
+    Patient Not Interested responses to be inspected.
 
-<meta charset="UTF-8">
+    This is NOT a production endpoint.
+    """
 
-<meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0"
->
-
-<title>
-HeLaSync Referral Submitted
-</title>
-
-<style>
-
-body {{
-    margin: 0;
-    background: #f7f9fc;
-    color: #243b53;
-    font-family:
-        -apple-system,
-        BlinkMacSystemFont,
-        "Segoe UI",
-        Roboto,
-        sans-serif;
-}}
-
-.container {{
-    max-width: 650px;
-    margin: 80px auto;
-    padding: 24px;
-}}
-
-.box {{
-    background: white;
-    border: 1px solid #d9e2ec;
-    border-radius: 18px;
-    padding: 36px;
-    text-align: center;
-}}
-
-.icon {{
-    width: 64px;
-    height: 64px;
-    margin: 0 auto 20px;
-    border-radius: 50%;
-    background: #e8f7ee;
-    color: #16803c;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 30px;
-    font-weight: 800;
-}}
-
-h1 {{
-    color: #102a43;
-    margin-bottom: 10px;
-}}
-
-.referral-id {{
-    display: inline-block;
-    margin: 20px 0;
-    padding: 12px 18px;
-    background: #f1f5f9;
-    border-radius: 8px;
-    font-family: monospace;
-    font-weight: 700;
-}}
-
-.notice {{
-    background: #eef5ff;
-    border: 1px solid #c9dcff;
-    color: #174ea6;
-    padding: 14px;
-    border-radius: 9px;
-    font-size: 13px;
-    line-height: 1.5;
-    text-align: left;
-}}
-
-.actions {{
-    margin-top: 25px;
-    display: flex;
-    gap: 10px;
-    justify-content: center;
-    flex-wrap: wrap;
-}}
-
-.button {{
-    display: inline-block;
-    padding: 12px 18px;
-    border-radius: 9px;
-    text-decoration: none;
-    font-weight: 700;
-    font-size: 14px;
-}}
-
-.primary {{
-    background: #155eef;
-    color: white;
-}}
-
-.secondary {{
-    border: 1px solid #d9e2ec;
-    color: #243b53;
-    background: white;
-}}
-
-</style>
-
-</head>
-
-<body>
-
-<div class="container">
-
-<div class="box">
-
-<div class="icon">
-✓
-</div>
-
-<h1>
-Referral Submitted
-</h1>
-
-<p>
-{esc(status_message)}
-</p>
-
-<div class="referral-id">
-Referral ID: {esc(referral_id)}
-</div>
-
-<div class="notice">
-
-The referral is not an enrollment decision.
-The research team must review the referral and perform
-the appropriate screening process.
-
-</div>
-
-<div class="actions">
-
-<a
-    class="button primary"
-    href="{esc(research_dashboard_url)}"
->
-    View Research Queue
-</a>
-
-<a
-    class="button secondary"
-    href="javascript:history.back()"
->
-    Return to Smart App
-</a>
-
-</div>
-
-</div>
-
-</div>
-
-</body>
-
-</html>
-"""
-    )
+    return PATIENT_NOT_INTERESTED_RESPONSES
