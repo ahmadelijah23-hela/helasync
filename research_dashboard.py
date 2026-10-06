@@ -2,34 +2,24 @@
 HeLaSync Research Referral Dashboard
 -------------------------------------
 
-Clinician/research-team referral work queue.
+Stage 3A Research Referral Dashboard.
 
-This dashboard reads referral records from the
-HeLaSync in-memory referral service and provides:
+Purpose:
+- Display referrals created through the HeLaSync CDS Hooks workflow.
+- Allow the research team to review referral details.
+- Allow research staff to update referral status.
+- Display referral history and duplicate referral attempts.
 
-- Referral queue
-- Trial information
-- Patient identifier
-- Referring clinician
-- Encounter
-- Research team
-- Referral ID
-- Referral status
-- Status updates
-- Referral history
-- Duplicate referral visibility
-
-Prototype only.
-
-Referral persistence is currently in-memory and is
-lost when the Render service restarts or redeploys.
+Important:
+This is a prototype dashboard. Referral data is currently stored
+in-memory by referral.py and will reset when the Render service restarts.
 """
-
-from typing import Any, Dict, List
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
+from typing import Optional
+from html import escape
 
 from referral import (
     list_referrals,
@@ -38,23 +28,11 @@ from referral import (
 )
 
 
-# ============================================================
-# ROUTER
-# ============================================================
-
 router = APIRouter()
 
 
 # ============================================================
-# STATUS MODEL
-# ============================================================
-
-class ReferralStatusUpdate(BaseModel):
-    status: str
-
-
-# ============================================================
-# ALLOWED STATUS VALUES
+# STATUS CONFIGURATION
 # ============================================================
 
 ALLOWED_STATUSES = {
@@ -67,97 +45,69 @@ ALLOWED_STATUSES = {
 }
 
 
+STATUS_LABELS = {
+    "INTERESTED": "Interested",
+    "UNDER_REVIEW": "Under Review",
+    "CONTACTED": "Contacted",
+    "SCREENING": "Screening",
+    "ENROLLED": "Enrolled",
+    "NOT_ELIGIBLE": "Not Eligible",
+}
+
+
+STATUS_CLASSES = {
+    "INTERESTED": "status-interested",
+    "UNDER_REVIEW": "status-review",
+    "CONTACTED": "status-contacted",
+    "SCREENING": "status-screening",
+    "ENROLLED": "status-enrolled",
+    "NOT_ELIGIBLE": "status-not-eligible",
+}
+
+
 # ============================================================
-# HTML ESCAPING
+# REQUEST MODEL
 # ============================================================
 
-def escape_html(value: Any) -> str:
-    """
-    Safely escape values before placing them into HTML.
-    """
+class ReferralStatusUpdate(BaseModel):
+    status: str
 
+
+# ============================================================
+# HELPER FUNCTIONS
+# ============================================================
+
+def safe(value) -> str:
+    """
+    Convert a value to a safely escaped string for HTML.
+    """
     if value is None:
-        return ""
+        return "—"
 
-    text = str(value)
+    text = str(value).strip()
 
-    return (
-        text
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-        .replace("'", "&#039;")
+    if not text:
+        return "—"
+
+    return escape(text)
+
+
+def get_status_class(status: str) -> str:
+    return STATUS_CLASSES.get(
+        status,
+        "status-default"
     )
 
 
-# ============================================================
-# STATUS DISPLAY
-# ============================================================
-
-def status_class(status: str) -> str:
-    """
-    Convert referral status into a CSS class.
-    """
-
-    normalized = str(
-        status or ""
-    ).strip().upper()
-
-    mapping = {
-        "INTERESTED": "status-interested",
-        "UNDER_REVIEW": "status-under-review",
-        "CONTACTED": "status-contacted",
-        "SCREENING": "status-screening",
-        "ENROLLED": "status-enrolled",
-        "NOT_ELIGIBLE": "status-not-eligible",
-    }
-
-    return mapping.get(
-        normalized,
-        "status-default",
+def get_status_label(status: str) -> str:
+    return STATUS_LABELS.get(
+        status,
+        status.replace("_", " ").title()
     )
 
 
-def status_label(status: str) -> str:
-    """
-    Convert internal status into human-readable text.
-    """
-
-    normalized = str(
-        status or ""
-    ).strip().upper()
-
-    mapping = {
-        "INTERESTED": "Interested",
-        "UNDER_REVIEW": "Under Review",
-        "CONTACTED": "Contacted",
-        "SCREENING": "Screening",
-        "ENROLLED": "Enrolled",
-        "NOT_ELIGIBLE": "Not Eligible",
-    }
-
-    return mapping.get(
-        normalized,
-        normalized.replace("_", " ").title(),
-    )
-
-
-# ============================================================
-# REFERRAL HISTORY SUMMARY
-# ============================================================
-
-def duplicate_attempt_count(
-    referral: Dict[str, Any],
-) -> int:
-    """
-    Count duplicate referral attempts.
-    """
-
-    history = referral.get(
-        "referral_history",
-        [],
-    )
+def count_duplicate_attempts(referral: dict) -> int:
+    history = referral.get("referral_history", [])
 
     if not isinstance(history, list):
         return 0
@@ -166,23 +116,441 @@ def duplicate_attempt_count(
         1
         for event in history
         if isinstance(event, dict)
-        and event.get("event")
-        == "DUPLICATE_REFERRAL_ATTEMPT"
+        and event.get("event") == "DUPLICATE_REFERRAL_ATTEMPT"
     )
 
 
+def render_history(referral: dict) -> str:
+    """
+    Render referral history as HTML.
+    """
+
+    history = referral.get("referral_history", [])
+
+    if not isinstance(history, list) or not history:
+        return """
+        <div class="empty-history">
+            No referral history available.
+        </div>
+        """
+
+    rows = []
+
+    for event in history:
+        if not isinstance(event, dict):
+            continue
+
+        timestamp = safe(event.get("timestamp"))
+        event_name = safe(
+            str(event.get("event", "UNKNOWN"))
+            .replace("_", " ")
+            .title()
+        )
+
+        source = safe(event.get("source"))
+        clinician = safe(event.get("clinician_id"))
+        encounter = safe(event.get("encounter_id"))
+        status = safe(event.get("status"))
+
+        rows.append(
+            f"""
+            <div class="history-row">
+                <div class="history-main">
+                    <strong>{event_name}</strong>
+                    <span class="history-time">{timestamp}</span>
+                </div>
+
+                <div class="history-details">
+                    <span>Source: {source}</span>
+                    <span>Clinician: {clinician}</span>
+                    <span>Encounter: {encounter}</span>
+                    <span>Status: {status}</span>
+                </div>
+            </div>
+            """
+        )
+
+    return "\n".join(rows)
+
+
+def render_status_options(current_status: str) -> str:
+    options = []
+
+    for status in [
+        "INTERESTED",
+        "UNDER_REVIEW",
+        "CONTACTED",
+        "SCREENING",
+        "ENROLLED",
+        "NOT_ELIGIBLE",
+    ]:
+        selected = "selected" if status == current_status else ""
+
+        options.append(
+            f"""
+            <option value="{escape(status)}" {selected}>
+                {escape(get_status_label(status))}
+            </option>
+            """
+        )
+
+    return "\n".join(options)
+
+
+def render_referral_card(referral: dict) -> str:
+    """
+    Render one referral card directly from server-side data.
+    """
+
+    referral_id = referral.get("referral_id", "")
+    trial_id = referral.get("trial_id", "")
+    trial_name = referral.get("trial_name", "")
+    patient_id = referral.get("patient_id", "")
+    clinician_id = referral.get("clinician_id", "")
+    encounter_id = referral.get("encounter_id", "")
+    research_team = referral.get("research_team", "")
+    research_email = referral.get("research_email", "")
+    status = referral.get("status", "INTERESTED")
+    source = referral.get("source", "")
+    created_at = referral.get("created_at", "")
+    updated_at = referral.get("updated_at", "")
+
+    duplicate_count = count_duplicate_attempts(referral)
+
+    status_class = get_status_class(status)
+    status_label = get_status_label(status)
+
+    history_html = render_history(referral)
+    status_options = render_status_options(status)
+
+    duplicate_html = ""
+
+    if duplicate_count > 0:
+        duplicate_html = f"""
+        <div class="duplicate-warning">
+            <div class="duplicate-icon">!</div>
+            <div>
+                <strong>Duplicate referral activity detected</strong>
+                <div>
+                    This referral has been submitted or opened
+                    {duplicate_count} additional time{"s" if duplicate_count != 1 else ""}.
+                    The existing referral was preserved.
+                </div>
+            </div>
+        </div>
+        """
+
+    return f"""
+    <article class="referral-card">
+
+        <!-- HEADER -->
+
+        <div class="card-header">
+
+            <div class="trial-header">
+
+                <div class="trial-icon">
+                    HS
+                </div>
+
+                <div>
+                    <div class="eyebrow">
+                        CLINICAL TRIAL REFERRAL
+                    </div>
+
+                    <h2>
+                        {safe(trial_name)}
+                    </h2>
+
+                    <div class="trial-id">
+                        {safe(trial_id)}
+                    </div>
+                </div>
+
+            </div>
+
+            <div class="status-area">
+
+                <span class="status-badge {status_class}">
+                    {safe(status_label)}
+                </span>
+
+                <div class="status-controls">
+
+                    <select
+                        id="status-{safe(referral_id)}"
+                        class="status-select"
+                    >
+                        {status_options}
+                    </select>
+
+                    <button
+                        class="update-button"
+                        onclick="updateReferralStatus('{safe(referral_id)}')"
+                    >
+                        Update
+                    </button>
+
+                </div>
+
+            </div>
+
+        </div>
+
+
+        {duplicate_html}
+
+
+        <!-- REFERRAL IDENTIFIERS -->
+
+        <div class="section">
+
+            <div class="section-title">
+                Referral Information
+            </div>
+
+            <div class="info-grid">
+
+                <div class="info-item">
+                    <div class="info-label">
+                        Referral ID
+                    </div>
+                    <div class="info-value mono">
+                        {safe(referral_id)}
+                    </div>
+                </div>
+
+                <div class="info-item">
+                    <div class="info-label">
+                        Source
+                    </div>
+                    <div class="info-value">
+                        {safe(source)}
+                    </div>
+                </div>
+
+                <div class="info-item">
+                    <div class="info-label">
+                        Created
+                    </div>
+                    <div class="info-value">
+                        {safe(created_at)}
+                    </div>
+                </div>
+
+                <div class="info-item">
+                    <div class="info-label">
+                        Last Updated
+                    </div>
+                    <div class="info-value">
+                        {safe(updated_at)}
+                    </div>
+                </div>
+
+            </div>
+
+        </div>
+
+
+        <!-- PATIENT -->
+
+        <div class="section">
+
+            <div class="section-title">
+                Patient
+            </div>
+
+            <div class="patient-box">
+
+                <div class="patient-avatar">
+                    P
+                </div>
+
+                <div>
+
+                    <div class="patient-id">
+                        {safe(patient_id)}
+                    </div>
+
+                    <div class="patient-label">
+                        Patient Identifier
+                    </div>
+
+                </div>
+
+            </div>
+
+        </div>
+
+
+        <!-- CLINICIAN / ENCOUNTER -->
+
+        <div class="section">
+
+            <div class="section-title">
+                Referring Clinician & Encounter
+            </div>
+
+            <div class="info-grid">
+
+                <div class="info-item">
+                    <div class="info-label">
+                        Referring Clinician
+                    </div>
+
+                    <div class="info-value">
+                        {safe(clinician_id)}
+                    </div>
+                </div>
+
+
+                <div class="info-item">
+
+                    <div class="info-label">
+                        Encounter
+                    </div>
+
+                    <div class="info-value mono">
+                        {safe(encounter_id)}
+                    </div>
+
+                </div>
+
+            </div>
+
+        </div>
+
+
+        <!-- RESEARCH ROUTING -->
+
+        <div class="section">
+
+            <div class="section-title">
+                Research Routing
+            </div>
+
+            <div class="research-routing">
+
+                <div class="routing-item">
+
+                    <div class="routing-label">
+                        Research Team
+                    </div>
+
+                    <div class="routing-value">
+                        {safe(research_team)}
+                    </div>
+
+                </div>
+
+                <div class="routing-item">
+
+                    <div class="routing-label">
+                        Research Email
+                    </div>
+
+                    <div class="routing-value">
+                        {safe(research_email)}
+                    </div>
+
+                </div>
+
+            </div>
+
+        </div>
+
+
+        <!-- HISTORY -->
+
+        <details class="history-section">
+
+            <summary>
+                <span>
+                    Referral History
+                </span>
+
+                <span class="history-count">
+                    {len(referral.get("referral_history", []))}
+                </span>
+            </summary>
+
+            <div class="history-content">
+                {history_html}
+            </div>
+
+        </details>
+
+
+    </article>
+    """
+
+
 # ============================================================
-# DASHBOARD
+# DASHBOARD PAGE
 # ============================================================
 
 @router.get(
     "/research/referrals",
-    response_class=HTMLResponse,
+    response_class=HTMLResponse
 )
-async def research_referrals_dashboard():
+def research_referral_dashboard():
 
-    return HTMLResponse(
-        content="""
+    referrals = list_referrals()
+
+    if not isinstance(referrals, list):
+        referrals = []
+
+    if referrals:
+
+        referral_cards = "\n".join(
+            render_referral_card(referral)
+            for referral in referrals
+            if isinstance(referral, dict)
+        )
+
+    else:
+
+        referral_cards = """
+        <div class="empty-state">
+
+            <div class="empty-icon">
+                HS
+            </div>
+
+            <h2>
+                No referrals yet
+            </h2>
+
+            <p>
+                Clinical trial referrals created through
+                the HeLaSync CDS Hooks workflow will appear here.
+            </p>
+
+        </div>
+        """
+
+
+    total = len(referrals)
+
+    interested = sum(
+        1
+        for referral in referrals
+        if referral.get("status") == "INTERESTED"
+    )
+
+    screening = sum(
+        1
+        for referral in referrals
+        if referral.get("status") == "SCREENING"
+    )
+
+    enrolled = sum(
+        1
+        for referral in referrals
+        if referral.get("status") == "ENROLLED"
+    )
+
+    return f"""
 <!DOCTYPE html>
 
 <html lang="en">
@@ -194,679 +562,750 @@ async def research_referrals_dashboard():
 <meta
     name="viewport"
     content="width=device-width, initial-scale=1.0"
-/>
+>
 
 <title>
     HeLaSync Research Referrals
 </title>
 
+
 <style>
 
-    * {
-        box-sizing: border-box;
-    }
+/* =========================================================
+   GLOBAL
+   ========================================================= */
+
+* {{
+    box-sizing: border-box;
+}}
+
+body {{
+    margin: 0;
+    font-family:
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        Roboto,
+        Helvetica,
+        Arial,
+        sans-serif;
+
+    background: #f4f7fb;
+    color: #172033;
+}}
+
+
+/* =========================================================
+   HEADER
+   ========================================================= */
+
+.topbar {{
+    background: #ffffff;
+    border-bottom: 1px solid #e4e9f0;
+    padding: 18px 32px;
+
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}}
+
+.brand {{
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}}
+
+.brand-mark {{
+    width: 42px;
+    height: 42px;
+
+    border-radius: 12px;
+
+    background: #172033;
+    color: #ffffff;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    font-weight: 800;
+    letter-spacing: -0.5px;
+}}
+
+.brand-name {{
+    font-size: 19px;
+    font-weight: 750;
+}}
+
+.brand-subtitle {{
+    font-size: 12px;
+    color: #6d7788;
+    margin-top: 2px;
+}}
+
+.header-actions {{
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}}
+
+.refresh-button {{
+    border: 1px solid #d7dee8;
+    background: #ffffff;
+    color: #172033;
 
-    body {
+    border-radius: 9px;
+    padding: 9px 14px;
 
-        margin: 0;
+    font-size: 13px;
+    font-weight: 650;
 
-        font-family:
-            -apple-system,
-            BlinkMacSystemFont,
-            "Segoe UI",
-            Roboto,
-            Helvetica,
-            Arial,
-            sans-serif;
+    cursor: pointer;
+}}
 
-        background: #f4f7fb;
+.refresh-button:hover {{
+    background: #f6f8fb;
+}}
 
-        color: #1f2937;
-    }
 
+/* =========================================================
+   PAGE
+   ========================================================= */
 
-    /* =====================================================
-       HEADER
-       ===================================================== */
+.container {{
+    width: min(1180px, calc(100% - 40px));
+    margin: 0 auto;
+    padding: 36px 0 70px;
+}}
 
-    .header {
+.page-heading {{
+    margin-bottom: 24px;
+}}
 
-        background: #111827;
+.eyebrow {{
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    color: #637084;
+    text-transform: uppercase;
+}}
 
-        color: white;
+.page-heading h1 {{
+    margin: 6px 0 8px;
 
-        padding:
-            26px
-            34px;
-    }
+    font-size: 30px;
+    line-height: 1.15;
 
-    .header h1 {
+    letter-spacing: -0.7px;
+}}
 
-        margin: 0;
+.page-heading p {{
+    margin: 0;
+    color: #687386;
+    font-size: 14px;
+}}
 
-        font-size: 28px;
 
-        font-weight: 700;
-    }
+/* =========================================================
+   STATS
+   ========================================================= */
 
-    .header p {
+.stats {{
+    display: grid;
+    grid-template-columns:
+        repeat(4, minmax(0, 1fr));
 
-        margin:
-            5px
-            0
-            0;
+    gap: 14px;
 
-        color: #cbd5e1;
+    margin-bottom: 26px;
+}}
 
-        font-size: 14px;
-    }
+.stat-card {{
+    background: #ffffff;
 
+    border: 1px solid #e3e8ef;
+    border-radius: 13px;
 
-    /* =====================================================
-       PAGE
-       ===================================================== */
+    padding: 18px;
+}}
 
-    .container {
+.stat-label {{
+    color: #697589;
+    font-size: 12px;
+    font-weight: 650;
+}}
 
-        max-width: 1100px;
+.stat-number {{
+    margin-top: 7px;
 
-        margin:
-            0
-            auto;
+    font-size: 27px;
+    font-weight: 780;
 
-        padding:
-            30px
-            20px;
-    }
+    letter-spacing: -0.5px;
+}}
 
 
-    /* =====================================================
-       TOP BAR
-       ===================================================== */
+/* =========================================================
+   REFERRAL CARD
+   ========================================================= */
 
-    .queue-header {
+.referral-card {{
+    background: #ffffff;
 
-        display: flex;
+    border: 1px solid #dfe5ed;
+    border-radius: 15px;
 
-        align-items: center;
+    margin-bottom: 18px;
 
-        justify-content: space-between;
+    overflow: hidden;
 
-        margin-bottom: 18px;
-    }
+    box-shadow:
+        0 2px 8px rgba(20, 35, 60, 0.035);
+}}
 
-    .queue-header h2 {
+.card-header {{
+    padding: 22px 24px;
 
-        margin: 0;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
 
-        font-size: 24px;
-    }
+    gap: 20px;
 
-    .queue-subtitle {
+    border-bottom: 1px solid #e9edf3;
+}}
 
-        margin-top: 4px;
+.trial-header {{
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+}}
 
-        color: #64748b;
+.trial-icon {{
+    flex: 0 0 auto;
 
-        font-size: 14px;
-    }
+    width: 46px;
+    height: 46px;
 
-    .refresh-button {
+    border-radius: 12px;
 
-        border: none;
+    background: #eef2ff;
+    color: #3f51b5;
 
-        background: #2563eb;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 
-        color: white;
+    font-size: 13px;
+    font-weight: 800;
+}}
 
-        border-radius: 6px;
+.card-header h2 {{
+    margin: 3px 0 5px;
 
-        padding:
-            9px
-            18px;
+    font-size: 19px;
+    line-height: 1.3;
 
-        font-weight: 600;
+    color: #172033;
+}}
 
-        cursor: pointer;
-    }
+.trial-id {{
+    color: #697589;
+    font-family: monospace;
+    font-size: 12px;
+}}
 
-    .refresh-button:hover {
+.status-area {{
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 10px;
+}}
 
-        background: #1d4ed8;
-    }
+.status-badge {{
+    display: inline-flex;
+    align-items: center;
 
-    .refresh-button:disabled {
+    border-radius: 999px;
 
-        opacity: 0.6;
+    padding: 6px 11px;
 
-        cursor: wait;
-    }
+    font-size: 11px;
+    font-weight: 750;
 
+    white-space: nowrap;
+}}
 
-    /* =====================================================
-       SUMMARY
-       ===================================================== */
+.status-interested {{
+    background: #eaf7ef;
+    color: #187443;
+}}
 
-    .summary-bar {
+.status-review {{
+    background: #fff5dc;
+    color: #8a6200;
+}}
 
-        display: flex;
+.status-contacted {{
+    background: #eaf2ff;
+    color: #2c5fa8;
+}}
 
-        gap: 12px;
+.status-screening {{
+    background: #eeeaff;
+    color: #5a43a4;
+}}
 
-        margin-bottom: 18px;
+.status-enrolled {{
+    background: #dff5ed;
+    color: #087454;
+}}
 
-        flex-wrap: wrap;
-    }
+.status-not-eligible {{
+    background: #fcebea;
+    color: #a33a36;
+}}
 
-    .summary-box {
+.status-default {{
+    background: #edf0f4;
+    color: #556070;
+}}
 
-        background: white;
+.status-controls {{
+    display: flex;
+    gap: 7px;
+}}
 
-        border: 1px solid #e2e8f0;
+.status-select {{
+    border: 1px solid #d8dfe8;
+    background: #ffffff;
 
-        border-radius: 8px;
+    border-radius: 8px;
 
-        padding:
-            12px
-            16px;
+    padding: 7px 9px;
 
-        min-width: 150px;
-    }
+    font-size: 12px;
+    color: #2d3748;
+}}
 
-    .summary-label {
+.update-button {{
+    border: 0;
 
-        font-size: 12px;
+    background: #172033;
+    color: #ffffff;
 
-        color: #64748b;
+    border-radius: 8px;
 
-        margin-bottom: 4px;
-    }
+    padding: 7px 12px;
 
-    .summary-value {
+    font-size: 12px;
+    font-weight: 700;
 
-        font-size: 22px;
+    cursor: pointer;
+}}
 
-        font-weight: 700;
+.update-button:hover {{
+    background: #29364e;
+}}
 
-        color: #111827;
-    }
 
+/* =========================================================
+   DUPLICATE WARNING
+   ========================================================= */
 
-    /* =====================================================
-       REFERRAL CARD
-       ===================================================== */
+.duplicate-warning {{
+    margin: 18px 24px 0;
 
-    .referral-card {
+    display: flex;
+    gap: 11px;
 
-        background: white;
+    padding: 12px 14px;
 
-        border-radius: 10px;
+    border: 1px solid #f0d9a1;
+    border-radius: 10px;
 
-        border: 1px solid #e2e8f0;
+    background: #fff9e9;
 
-        margin-bottom: 20px;
+    color: #735a1b;
 
-        padding: 22px;
+    font-size: 12px;
+    line-height: 1.5;
+}}
 
-        box-shadow:
-            0
-            2px
-            8px
-            rgba(15, 23, 42, 0.05);
-    }
+.duplicate-icon {{
+    flex: 0 0 auto;
 
+    width: 22px;
+    height: 22px;
 
-    /* =====================================================
-       CARD HEADER
-       ===================================================== */
+    border-radius: 50%;
 
-    .card-header {
+    background: #e8b849;
+    color: #ffffff;
 
-        display: flex;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 
-        justify-content: space-between;
+    font-weight: 800;
+}}
 
-        align-items: flex-start;
 
-        gap: 20px;
+/* =========================================================
+   SECTIONS
+   ========================================================= */
 
-        margin-bottom: 20px;
-    }
+.section {{
+    padding: 20px 24px;
 
-    .trial-title {
+    border-bottom: 1px solid #edf0f4;
+}}
 
-        margin: 0;
+.section-title {{
+    font-size: 12px;
+    font-weight: 800;
 
-        font-size: 21px;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
 
-        color: #111827;
-    }
+    color: #687386;
 
-    .trial-id {
+    margin-bottom: 14px;
+}}
 
-        margin-top: 5px;
+.info-grid {{
+    display: grid;
 
-        font-size: 13px;
+    grid-template-columns:
+        repeat(2, minmax(0, 1fr));
 
-        color: #64748b;
+    gap: 16px;
+}}
 
-        font-family: monospace;
-    }
+.info-item {{
+    min-width: 0;
+}}
 
+.info-label {{
+    color: #7a8493;
 
-    /* =====================================================
-       STATUS
-       ===================================================== */
+    font-size: 11px;
+    font-weight: 650;
 
-    .status-badge {
+    margin-bottom: 5px;
+}}
 
-        display: inline-block;
+.info-value {{
+    color: #222c3c;
 
-        padding:
-            6px
-            12px;
+    font-size: 13px;
+    line-height: 1.45;
 
-        border-radius: 999px;
+    overflow-wrap: anywhere;
+}}
 
-        font-size: 12px;
+.mono {{
+    font-family: monospace;
+    font-size: 12px;
+}}
 
-        font-weight: 700;
 
-        text-transform: uppercase;
+/* =========================================================
+   PATIENT
+   ========================================================= */
 
-        white-space: nowrap;
-    }
+.patient-box {{
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}}
 
-    .status-interested {
+.patient-avatar {{
+    width: 38px;
+    height: 38px;
 
-        background: #dbeafe;
+    border-radius: 50%;
 
-        color: #1d4ed8;
-    }
+    background: #eef2f6;
+    color: #465365;
 
-    .status-under-review {
+    display: flex;
+    align-items: center;
+    justify-content: center;
 
-        background: #fef3c7;
+    font-weight: 800;
+    font-size: 13px;
+}}
 
-        color: #92400e;
-    }
+.patient-id {{
+    font-size: 14px;
+    font-weight: 700;
+}}
 
-    .status-contacted {
+.patient-label {{
+    margin-top: 2px;
 
-        background: #dcfce7;
+    font-size: 11px;
+    color: #7a8493;
+}}
 
-        color: #166534;
-    }
 
-    .status-screening {
+/* =========================================================
+   RESEARCH ROUTING
+   ========================================================= */
 
-        background: #ede9fe;
+.research-routing {{
+    display: grid;
 
-        color: #6d28d9;
-    }
+    grid-template-columns:
+        repeat(2, minmax(0, 1fr));
 
-    .status-enrolled {
+    gap: 16px;
+}}
 
-        background: #dcfce7;
+.routing-item {{
+    background: #f8fafc;
 
-        color: #15803d;
-    }
+    border: 1px solid #e7ebf1;
 
-    .status-not-eligible {
+    border-radius: 9px;
 
-        background: #fee2e2;
+    padding: 12px;
+}}
 
-        color: #b91c1c;
-    }
+.routing-label {{
+    color: #7a8493;
 
-    .status-default {
+    font-size: 11px;
+    font-weight: 650;
 
-        background: #e2e8f0;
+    margin-bottom: 5px;
+}}
 
-        color: #475569;
-    }
+.routing-value {{
+    color: #252f40;
 
+    font-size: 13px;
 
-    /* =====================================================
-       INFORMATION GRID
-       ===================================================== */
+    overflow-wrap: anywhere;
+}}
 
-    .info-grid {
 
-        display: grid;
+/* =========================================================
+   HISTORY
+   ========================================================= */
 
+.history-section {{
+    padding: 0 24px;
+}}
+
+.history-section summary {{
+    cursor: pointer;
+
+    list-style: none;
+
+    padding: 18px 0;
+
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+
+    font-size: 13px;
+    font-weight: 750;
+}}
+
+.history-section summary::-webkit-details-marker {{
+    display: none;
+}}
+
+.history-count {{
+    min-width: 23px;
+    height: 23px;
+
+    border-radius: 50%;
+
+    background: #eef1f5;
+    color: #596578;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    font-size: 11px;
+}}
+
+.history-content {{
+    padding-bottom: 18px;
+}}
+
+.history-row {{
+    padding: 13px;
+
+    border: 1px solid #e5e9ef;
+
+    border-radius: 9px;
+
+    margin-bottom: 9px;
+
+    background: #fafbfd;
+}}
+
+.history-main {{
+    display: flex;
+    justify-content: space-between;
+    gap: 15px;
+
+    font-size: 12px;
+}}
+
+.history-time {{
+    color: #7a8493;
+    font-family: monospace;
+    font-size: 10px;
+}}
+
+.history-details {{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+
+    margin-top: 7px;
+
+    color: #697589;
+
+    font-size: 10px;
+}}
+
+
+/* =========================================================
+   EMPTY STATE
+   ========================================================= */
+
+.empty-state {{
+    background: #ffffff;
+
+    border: 1px dashed #d4dbe5;
+
+    border-radius: 14px;
+
+    padding: 65px 30px;
+
+    text-align: center;
+}}
+
+.empty-icon {{
+    width: 54px;
+    height: 54px;
+
+    border-radius: 15px;
+
+    background: #eef2f7;
+    color: #536175;
+
+    margin: 0 auto 14px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    font-weight: 800;
+}}
+
+.empty-state h2 {{
+    margin: 0 0 7px;
+
+    font-size: 18px;
+}}
+
+.empty-state p {{
+    margin: 0 auto;
+
+    max-width: 500px;
+
+    color: #737e8e;
+
+    font-size: 13px;
+    line-height: 1.6;
+}}
+
+
+/* =========================================================
+   FOOTER
+   ========================================================= */
+
+.footer {{
+    margin-top: 30px;
+
+    color: #8992a0;
+
+    font-size: 11px;
+
+    text-align: center;
+}}
+
+
+/* =========================================================
+   RESPONSIVE
+   ========================================================= */
+
+@media (max-width: 800px) {{
+
+    .topbar {{
+        padding: 15px 18px;
+    }}
+
+    .container {{
+        width: min(100% - 24px, 1180px);
+        padding-top: 25px;
+    }}
+
+    .stats {{
         grid-template-columns:
-            repeat(
-                2,
-                minmax(
-                    0,
-                    1fr
-                )
-            );
+            repeat(2, minmax(0, 1fr));
+    }}
 
-        gap: 14px;
+    .card-header {{
+        flex-direction: column;
+    }}
 
-        margin-bottom: 18px;
-    }
+    .status-area {{
+        align-items: flex-start;
+    }}
 
-    .info-box {
+    .info-grid,
+    .research-routing {{
+        grid-template-columns: 1fr;
+    }}
 
-        background: #f8fafc;
+}}
 
-        border-radius: 6px;
+@media (max-width: 520px) {{
 
-        padding:
-            12px
-            14px;
-    }
+    .stats {{
+        grid-template-columns: 1fr;
+    }}
 
-    .info-label {
+    .header-actions {{
+        display: none;
+    }}
 
-        font-size: 11px;
+    .card-header {{
+        padding: 18px;
+    }}
 
-        color: #64748b;
+    .section {{
+        padding: 18px;
+    }}
 
-        margin-bottom: 5px;
-    }
+    .history-section {{
+        padding: 0 18px;
+    }}
 
-    .info-value {
-
-        font-size: 14px;
-
-        font-weight: 500;
-
-        color: #1e293b;
-
-        word-break: break-word;
-    }
-
-    .monospace {
-
-        font-family: monospace;
-
-        font-size: 13px;
-    }
-
-
-    /* =====================================================
-       REFERRAL ID
-       ===================================================== */
-
-    .referral-id {
-
-        display: inline-block;
-
-        background: #f1f5f9;
-
-        padding:
-            7px
-            10px;
-
-        border-radius: 5px;
-
-        font-family: monospace;
-
-        font-size: 13px;
-
-        color: #334155;
-
-        margin-bottom: 16px;
-    }
-
-
-    /* =====================================================
-       DUPLICATE NOTICE
-       ===================================================== */
-
-    .duplicate-notice {
-
-        background: #fff7ed;
-
-        border: 1px solid #fed7aa;
-
-        color: #9a3412;
-
-        border-radius: 6px;
-
-        padding:
-            10px
-            12px;
-
-        margin-bottom: 16px;
-
-        font-size: 13px;
-    }
-
-
-    /* =====================================================
-       STATUS CONTROLS
-       ===================================================== */
-
-    .status-controls {
-
-        display: flex;
-
-        flex-wrap: wrap;
-
-        gap: 8px;
-
-        margin-top: 4px;
-    }
-
-    .status-button {
-
-        border: none;
-
-        color: white;
-
-        border-radius: 6px;
-
-        padding:
-            9px
-            14px;
-
-        font-size: 12px;
-
-        font-weight: 600;
-
-        cursor: pointer;
-    }
-
-    .status-button:hover {
-
-        opacity: 0.9;
-    }
-
-    .status-button:disabled {
-
-        opacity: 0.45;
-
-        cursor: not-allowed;
-    }
-
-    .button-review {
-
-        background: #2563eb;
-    }
-
-    .button-contacted {
-
-        background: #059669;
-    }
-
-    .button-screening {
-
-        background: #7c3aed;
-    }
-
-    .button-enrolled {
-
-        background: #16a34a;
-    }
-
-    .button-not-eligible {
-
-        background: #dc2626;
-    }
-
-
-    /* =====================================================
-       HISTORY
-       ===================================================== */
-
-    .history-section {
-
-        margin-top: 20px;
-
-        border-top:
-            1px
-            solid
-            #e2e8f0;
-
-        padding-top: 16px;
-    }
-
-    .history-title {
-
-        font-size: 14px;
-
-        font-weight: 700;
-
-        margin-bottom: 10px;
-    }
-
-    .history-event {
-
-        padding:
-            8px
-            0;
-
-        border-bottom:
-            1px
-            solid
-            #f1f5f9;
-
-        font-size: 12px;
-
-        color: #475569;
-    }
-
-    .history-event:last-child {
-
-        border-bottom: none;
-    }
-
-    .history-event strong {
-
-        color: #1e293b;
-    }
-
-
-    /* =====================================================
-       EMPTY STATE
-       ===================================================== */
-
-    .empty-state {
-
-        background: white;
-
-        border:
-            1px
-            solid
-            #e2e8f0;
-
-        border-radius: 10px;
-
-        padding:
-            50px
-            20px;
-
-        text-align: center;
-
-        color: #64748b;
-    }
-
-
-    /* =====================================================
-       ERROR
-       ===================================================== */
-
-    .error-state {
-
-        background: #fef2f2;
-
-        border:
-            1px
-            solid
-            #fecaca;
-
-        color: #b91c1c;
-
-        border-radius: 8px;
-
-        padding: 20px;
-
-        margin-bottom: 20px;
-    }
-
-
-    /* =====================================================
-       LOADING
-       ===================================================== */
-
-    .loading {
-
-        background: white;
-
-        border:
-            1px
-            solid
-            #e2e8f0;
-
-        border-radius: 10px;
-
-        padding:
-            35px;
-
-        text-align: center;
-
-        color: #64748b;
-    }
-
-
-    /* =====================================================
-       RESPONSIVE
-       ===================================================== */
-
-    @media (
-        max-width: 700px
-    ) {
-
-        .info-grid {
-
-            grid-template-columns: 1fr;
-        }
-
-        .card-header {
-
-            flex-direction: column;
-        }
-
-        .container {
-
-            padding:
-                20px
-                14px;
-        }
-
-        .header {
-
-            padding:
-                22px
-                18px;
-        }
-
-    }
+}}
 
 </style>
 
@@ -876,85 +1315,146 @@ async def research_referrals_dashboard():
 <body>
 
 
-<!-- =====================================================
-     HEADER
-     ===================================================== -->
+<!-- =======================================================
+     TOP BAR
+     ======================================================= -->
 
-<header class="header">
+<header class="topbar">
 
-    <h1>
-        HeLaSync Research Referrals
-    </h1>
+    <div class="brand">
 
-    <p>
-        Clinical trial referral work queue
-    </p>
+        <div class="brand-mark">
+            HS
+        </div>
+
+        <div>
+
+            <div class="brand-name">
+                HeLaSync
+            </div>
+
+            <div class="brand-subtitle">
+                Research Referral Management
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <div class="header-actions">
+
+        <button
+            class="refresh-button"
+            onclick="window.location.reload()"
+        >
+            Refresh Queue
+        </button>
+
+    </div>
 
 </header>
 
 
-<!-- =====================================================
+<!-- =======================================================
      MAIN
-     ===================================================== -->
+     ======================================================= -->
 
 <main class="container">
 
 
-    <!-- =================================================
-         QUEUE HEADER
-         ================================================= -->
+    <section class="page-heading">
 
-    <div class="queue-header">
+        <div class="eyebrow">
+            RESEARCH OPERATIONS
+        </div>
 
-        <div>
+        <h1>
+            Referral Queue
+        </h1>
 
-            <h2>
-                Referral Queue
-            </h2>
+        <p>
+            Clinical trial referrals generated through the
+            HeLaSync CDS Hooks workflow.
+        </p>
 
-            <div
-                class="queue-subtitle"
-                id="last-updated"
-            >
-                Loading referrals...
+    </section>
+
+
+    <!-- ===================================================
+         STATISTICS
+         =================================================== -->
+
+    <section class="stats">
+
+        <div class="stat-card">
+
+            <div class="stat-label">
+                Total Referrals
+            </div>
+
+            <div class="stat-number">
+                {total}
             </div>
 
         </div>
 
 
-        <button
-            id="refresh-button"
-            class="refresh-button"
-            onclick="loadReferrals()"
-        >
-            Refresh
-        </button>
+        <div class="stat-card">
 
-    </div>
+            <div class="stat-label">
+                Interested
+            </div>
 
-
-    <!-- =================================================
-         SUMMARY
-         ================================================= -->
-
-    <div
-        id="summary-bar"
-        class="summary-bar"
-        style="display:none;"
-    ></div>
-
-
-    <!-- =================================================
-         REFERRAL CONTENT
-         ================================================= -->
-
-    <div id="content">
-
-        <div class="loading">
-
-            Loading referral queue...
+            <div class="stat-number">
+                {interested}
+            </div>
 
         </div>
+
+
+        <div class="stat-card">
+
+            <div class="stat-label">
+                Screening
+            </div>
+
+            <div class="stat-number">
+                {screening}
+            </div>
+
+        </div>
+
+
+        <div class="stat-card">
+
+            <div class="stat-label">
+                Enrolled
+            </div>
+
+            <div class="stat-number">
+                {enrolled}
+            </div>
+
+        </div>
+
+    </section>
+
+
+    <!-- ===================================================
+         REFERRALS
+         =================================================== -->
+
+    <section>
+
+        {referral_cards}
+
+    </section>
+
+
+    <div class="footer">
+
+        HeLaSync Research Referral Dashboard · Prototype
 
     </div>
 
@@ -964,1234 +1464,88 @@ async def research_referrals_dashboard():
 
 <script>
 
+async function updateReferralStatus(referralId) {{
 
-// ========================================================
-// CONFIGURATION
-// ========================================================
+    var selectElement =
+        document.getElementById("status-" + referralId);
 
-const REFERRALS_ENDPOINT = "/referrals";
+    if (!selectElement) {{
+        alert("Unable to find the selected status.");
+        return;
+    }}
 
-const STATUS_ENDPOINT = "/referrals";
+    var newStatus = selectElement.value;
 
+    if (!newStatus) {{
+        alert("Please select a status.");
+        return;
+    }}
 
-// ========================================================
-// HTML ESCAPE
-// ========================================================
+    var button =
+        selectElement.parentElement.querySelector(".update-button");
 
-function escapeHtml(value) {
+    if (button) {{
+        button.disabled = true;
+        button.textContent = "Updating...";
+    }}
 
-    if (
-        value === null ||
-        value === undefined
-    ) {
+    try {{
 
-        return "";
+        var response = await fetch(
+            "/referrals/" +
+            encodeURIComponent(referralId) +
+            "/status",
+            {{
+                method: "PATCH",
 
-    }
+                headers: {{
+                    "Content-Type": "application/json"
+                }},
 
-    return String(value)
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;")
-        .replaceAll("'", "&#039;");
-}
+                body: JSON.stringify({{
+                    status: newStatus
+                }})
 
-
-// ========================================================
-// STATUS LABEL
-// ========================================================
-
-function statusLabel(status) {
-
-    const labels = {
-
-        "INTERESTED":
-            "Interested",
-
-        "UNDER_REVIEW":
-            "Under Review",
-
-        "CONTACTED":
-            "Contacted",
-
-        "SCREENING":
-            "Screening",
-
-        "ENROLLED":
-            "Enrolled",
-
-        "NOT_ELIGIBLE":
-            "Not Eligible"
-
-    };
-
-    return labels[status]
-        || String(status || "")
-            .replaceAll("_", " ")
-            .replace(
-                /\b\w/g,
-                c => c.toUpperCase()
-            );
-}
-
-
-// ========================================================
-// STATUS CSS
-// ========================================================
-
-function statusClass(status) {
-
-    const classes = {
-
-        "INTERESTED":
-            "status-interested",
-
-        "UNDER_REVIEW":
-            "status-under-review",
-
-        "CONTACTED":
-            "status-contacted",
-
-        "SCREENING":
-            "status-screening",
-
-        "ENROLLED":
-            "status-enrolled",
-
-        "NOT_ELIGIBLE":
-            "status-not-eligible"
-
-    };
-
-    return classes[status]
-        || "status-default";
-}
-
-
-// ========================================================
-// FORMAT DATE
-// ========================================================
-
-function formatDate(value) {
-
-    if (!value) {
-
-        return "—";
-
-    }
-
-    try {
-
-        return new Date(value)
-            .toLocaleString(
-                undefined,
-                {
-                    dateStyle: "medium",
-                    timeStyle: "short"
-                }
-            );
-
-    } catch (error) {
-
-        return value;
-
-    }
-}
-
-
-// ========================================================
-// LOAD REFERRALS
-// ========================================================
-
-async function loadReferrals() {
-
-    const content =
-        document.getElementById(
-            "content"
-        );
-
-    const refreshButton =
-        document.getElementById(
-            "refresh-button"
-        );
-
-    const lastUpdated =
-        document.getElementById(
-            "last-updated"
+            }}
         );
 
 
-    refreshButton.disabled = true;
+        if (!response.ok) {{
 
-    refreshButton.textContent =
-        "Refreshing...";
-
-
-    content.innerHTML = `
-        <div class="loading">
-            Loading referral queue...
-        </div>
-    `;
-
-
-    try {
-
-        const response =
-            await fetch(
-                REFERRALS_ENDPOINT,
-                {
-                    method: "GET",
-                    headers: {
-                        "Accept":
-                            "application/json"
-                    },
-                    cache: "no-store"
-                }
-            );
-
-
-        if (!response.ok) {
+            var errorText = await response.text();
 
             throw new Error(
-                `Referral API returned HTTP ${response.status}`
+                errorText ||
+                "Unable to update referral status."
             );
 
-        }
+        }}
 
 
-        const data =
-            await response.json();
+        /*
+         * Reload the page so the server-rendered dashboard
+         * reflects the updated referral state.
+         */
 
+        window.location.reload();
 
-        // ------------------------------------------------
-        // The current referral.py returns a LIST.
-        //
-        // We also support the older object format:
-        //
-        // {
-        //     "count": 1,
-        //     "referrals": [...]
-        // }
-        // ------------------------------------------------
+    }} catch (error) {{
 
-        let referrals = [];
-
-
-        if (Array.isArray(data)) {
-
-            referrals = data;
-
-        }
-
-        else if (
-            data &&
-            Array.isArray(
-                data.referrals
-            )
-        ) {
-
-            referrals =
-                data.referrals;
-
-        }
-
-        else {
-
-            throw new Error(
-                "Unexpected referral API response format."
-            );
-
-        }
-
-
-        renderSummary(
-            referrals
-        );
-
-
-        renderReferrals(
-            referrals
-        );
-
-
-        lastUpdated.textContent =
-            `Last updated: ${new Date().toLocaleString()}`;
-
-
-    }
-
-    catch (error) {
-
-        console.error(
-            "Unable to load referrals:",
-            error
-        );
-
-
-        content.innerHTML = `
-
-            <div class="error-state">
-
-                <strong>
-                    Unable to load referrals.
-                </strong>
-
-                <div style="margin-top:8px;">
-
-                    ${escapeHtml(
-                        error.message
-                    )}
-
-                </div>
-
-            </div>
-
-        `;
-
-
-        lastUpdated.textContent =
-            "Unable to load referral data.";
-
-    }
-
-    finally {
-
-        refreshButton.disabled =
-            false;
-
-        refreshButton.textContent =
-            "Refresh";
-
-    }
-
-}
-
-
-// ========================================================
-// SUMMARY
-// ========================================================
-
-function renderSummary(
-    referrals
-) {
-
-    const summaryBar =
-        document.getElementById(
-            "summary-bar"
-        );
-
-
-    const total =
-        referrals.length;
-
-
-    const interested =
-        referrals.filter(
-            r =>
-                r.status ===
-                "INTERESTED"
-        ).length;
-
-
-    const underReview =
-        referrals.filter(
-            r =>
-                r.status ===
-                "UNDER_REVIEW"
-        ).length;
-
-
-    const screening =
-        referrals.filter(
-            r =>
-                r.status ===
-                "SCREENING"
-        ).length;
-
-
-    const enrolled =
-        referrals.filter(
-            r =>
-                r.status ===
-                "ENROLLED"
-        ).length;
-
-
-    summaryBar.style.display =
-        "flex";
-
-
-    summaryBar.innerHTML = `
-
-        <div class="summary-box">
-
-            <div class="summary-label">
-                Total Referrals
-            </div>
-
-            <div class="summary-value">
-                ${total}
-            </div>
-
-        </div>
-
-
-        <div class="summary-box">
-
-            <div class="summary-label">
-                Interested
-            </div>
-
-            <div class="summary-value">
-                ${interested}
-            </div>
-
-        </div>
-
-
-        <div class="summary-box">
-
-            <div class="summary-label">
-                Under Review
-            </div>
-
-            <div class="summary-value">
-                ${underReview}
-            </div>
-
-        </div>
-
-
-        <div class="summary-box">
-
-            <div class="summary-label">
-                Screening
-            </div>
-
-            <div class="summary-value">
-                ${screening}
-            </div>
-
-        </div>
-
-
-        <div class="summary-box">
-
-            <div class="summary-label">
-                Enrolled
-            </div>
-
-            <div class="summary-value">
-                ${enrolled}
-            </div>
-
-        </div>
-
-    `;
-
-}
-
-
-// ========================================================
-// RENDER REFERRALS
-// ========================================================
-
-function renderReferrals(
-    referrals
-) {
-
-    const content =
-        document.getElementById(
-            "content"
-        );
-
-
-    if (
-        !referrals ||
-        referrals.length === 0
-    ) {
-
-        content.innerHTML = `
-
-            <div class="empty-state">
-
-                <h3>
-                    No referrals
-                </h3>
-
-                <p>
-                    There are currently no clinical
-                    trial referrals in the queue.
-                </p>
-
-            </div>
-
-        `;
-
-        return;
-
-    }
-
-
-    // Newest first.
-
-    referrals.sort(
-        (
-            a,
-            b
-        ) => {
-
-            const dateA =
-                new Date(
-                    a.created_at || 0
-                );
-
-            const dateB =
-                new Date(
-                    b.created_at || 0
-                );
-
-            return dateB - dateA;
-
-        }
-    );
-
-
-    content.innerHTML =
-        referrals
-            .map(
-                referral =>
-                    renderReferralCard(
-                        referral
-                    )
-            )
-            .join("");
-
-}
-
-
-// ========================================================
-// RENDER ONE REFERRAL
-// ========================================================
-
-function renderReferralCard(
-    referral
-) {
-
-    const status =
-        String(
-            referral.status ||
-            "INTERESTED"
-        ).toUpperCase();
-
-
-    const duplicateCount =
-        getDuplicateCount(
-            referral
-        );
-
-
-    const history =
-        Array.isArray(
-            referral.referral_history
-        )
-            ? referral.referral_history
-            : [];
-
-
-    const historyHtml =
-        renderHistory(
-            history
-        );
-
-
-    return `
-
-        <section
-            class="referral-card"
-            data-referral-id="${escapeHtml(
-                referral.referral_id
-            )}"
-        >
-
-
-            <!-- =========================================
-                 CARD HEADER
-                 ========================================= -->
-
-            <div class="card-header">
-
-                <div>
-
-                    <h3
-                        class="trial-title"
-                    >
-                        ${escapeHtml(
-                            referral.trial_name
-                            || "Clinical Trial"
-                        )}
-                    </h3>
-
-
-                    <div
-                        class="trial-id"
-                    >
-                        ${escapeHtml(
-                            referral.trial_id
-                            || "No trial ID"
-                        )}
-                    </div>
-
-                </div>
-
-
-                <div>
-
-                    <span
-                        class="status-badge ${statusClass(
-                            status
-                        )}"
-                    >
-                        ${escapeHtml(
-                            statusLabel(
-                                status
-                            )
-                        )}
-                    </span>
-
-                </div>
-
-            </div>
-
-
-            <!-- =========================================
-                 INFORMATION
-                 ========================================= -->
-
-            <div class="info-grid">
-
-
-                <div class="info-box">
-
-                    <div
-                        class="info-label"
-                    >
-                        Patient
-                    </div>
-
-                    <div
-                        class="info-value monospace"
-                    >
-                        ${escapeHtml(
-                            referral.patient_id
-                            || "Not provided"
-                        )}
-                    </div>
-
-                </div>
-
-
-                <div class="info-box">
-
-                    <div
-                        class="info-label"
-                    >
-                        Referring Clinician
-                    </div>
-
-                    <div
-                        class="info-value"
-                    >
-                        ${escapeHtml(
-                            referral.clinician_id
-                            || "Not provided"
-                        )}
-                    </div>
-
-                </div>
-
-
-                <div class="info-box">
-
-                    <div
-                        class="info-label"
-                    >
-                        Encounter
-                    </div>
-
-                    <div
-                        class="info-value monospace"
-                    >
-                        ${escapeHtml(
-                            referral.encounter_id
-                            || "Not provided"
-                        )}
-                    </div>
-
-                </div>
-
-
-                <div class="info-box">
-
-                    <div
-                        class="info-label"
-                    >
-                        Research Team
-                    </div>
-
-                    <div
-                        class="info-value"
-                    >
-                        ${escapeHtml(
-                            referral.research_team
-                            || "Not provided"
-                        )}
-                    </div>
-
-                </div>
-
-
-                <div class="info-box">
-
-                    <div
-                        class="info-label"
-                    >
-                        Research Email
-                    </div>
-
-                    <div
-                        class="info-value"
-                    >
-                        ${escapeHtml(
-                            referral.research_email
-                            || "Not provided"
-                        )}
-                    </div>
-
-                </div>
-
-
-                <div class="info-box">
-
-                    <div
-                        class="info-label"
-                    >
-                        Created
-                    </div>
-
-                    <div
-                        class="info-value"
-                    >
-                        ${escapeHtml(
-                            formatDate(
-                                referral.created_at
-                            )
-                        )}
-                    </div>
-
-                </div>
-
-
-            </div>
-
-
-            <!-- =========================================
-                 REFERRAL ID
-                 ========================================= -->
-
-            <div>
-
-                <span
-                    class="referral-id"
-                >
-                    Referral ID:
-                    ${escapeHtml(
-                        referral.referral_id
-                        || "Unknown"
-                    )}
-                </span>
-
-            </div>
-
-
-            <!-- =========================================
-                 DUPLICATE NOTICE
-                 ========================================= -->
-
-            ${
-                duplicateCount > 0
-                    ? `
-
-                        <div
-                            class="duplicate-notice"
-                        >
-
-                            <strong>
-                                Duplicate protection:
-                            </strong>
-
-                            ${duplicateCount}
-                            duplicate referral
-                            ${
-                                duplicateCount === 1
-                                    ? "attempt"
-                                    : "attempts"
-                            }
-                            detected for this
-                            patient/trial combination.
-                            No additional referral
-                            was created.
-
-                        </div>
-
-                      `
-                    : ""
-            }
-
-
-            <!-- =========================================
-                 STATUS CONTROLS
-                 ========================================= -->
-
-            <div
-                class="status-controls"
-            >
-
-
-                <button
-                    class="status-button button-review"
-                    onclick="updateStatus(
-                        '${escapeJs(
-                            referral.referral_id
-                        )}',
-                        'UNDER_REVIEW'
-                    )"
-                    ${status === "UNDER_REVIEW"
-                        ? "disabled"
-                        : ""}
-                >
-                    Under Review
-                </button>
-
-
-                <button
-                    class="status-button button-contacted"
-                    onclick="updateStatus(
-                        '${escapeJs(
-                            referral.referral_id
-                        )}',
-                        'CONTACTED'
-                    )"
-                    ${status === "CONTACTED"
-                        ? "disabled"
-                        : ""}
-                >
-                    Contacted
-                </button>
-
-
-                <button
-                    class="status-button button-screening"
-                    onclick="updateStatus(
-                        '${escapeJs(
-                            referral.referral_id
-                        )}',
-                        'SCREENING'
-                    )"
-                    ${status === "SCREENING"
-                        ? "disabled"
-                        : ""}
-                >
-                    Screening
-                </button>
-
-
-                <button
-                    class="status-button button-enrolled"
-                    onclick="updateStatus(
-                        '${escapeJs(
-                            referral.referral_id
-                        )}',
-                        'ENROLLED'
-                    )"
-                    ${status === "ENROLLED"
-                        ? "disabled"
-                        : ""}
-                >
-                    Enrolled
-                </button>
-
-
-                <button
-                    class="status-button button-not-eligible"
-                    onclick="updateStatus(
-                        '${escapeJs(
-                            referral.referral_id
-                        )}',
-                        'NOT_ELIGIBLE'
-                    )"
-                    ${status === "NOT_ELIGIBLE"
-                        ? "disabled"
-                        : ""}
-                >
-                    Not Eligible
-                </button>
-
-
-            </div>
-
-
-            <!-- =========================================
-                 HISTORY
-                 ========================================= -->
-
-            ${
-                history.length > 0
-                    ? `
-
-                        <div
-                            class="history-section"
-                        >
-
-                            <div
-                                class="history-title"
-                            >
-                                Referral History
-                            </div>
-
-                            ${historyHtml}
-
-                        </div>
-
-                      `
-                    : ""
-            }
-
-
-        </section>
-
-    `;
-
-}
-
-
-// ========================================================
-// JAVASCRIPT ESCAPE
-// ========================================================
-
-function escapeJs(
-    value
-) {
-
-    if (
-        value === null ||
-        value === undefined
-    ) {
-
-        return "";
-
-    }
-
-
-    return String(value)
-
-        .replaceAll(
-            "\\",
-            "\\\\"
-        )
-
-        .replaceAll(
-            "'",
-            "\\'"
-        )
-
-        .replaceAll(
-            "\n",
-            "\\n"
-        )
-
-        .replaceAll(
-            "\r",
-            "\\r"
-        );
-
-}
-
-
-// ========================================================
-// DUPLICATE COUNT
-// ========================================================
-
-function getDuplicateCount(
-    referral
-) {
-
-    const history =
-        Array.isArray(
-            referral.referral_history
-        )
-            ? referral.referral_history
-            : [];
-
-
-    return history.filter(
-        event =>
-            event &&
-            event.event ===
-                "DUPLICATE_REFERRAL_ATTEMPT"
-    ).length;
-
-}
-
-
-// ========================================================
-// HISTORY
-// ========================================================
-
-function renderHistory(
-    history
-) {
-
-    return history
-        .slice()
-        .reverse()
-        .map(
-            event => {
-
-                if (!event) {
-
-                    return "";
-
-                }
-
-
-                const eventType =
-                    event.event
-                    || "EVENT";
-
-
-                let description =
-                    eventType;
-
-
-                if (
-                    eventType ===
-                    "REFERRAL_CREATED"
-                ) {
-
-                    description =
-                        "Referral created";
-
-                }
-
-
-                else if (
-                    eventType ===
-                    "DUPLICATE_REFERRAL_ATTEMPT"
-                ) {
-
-                    description =
-                        "Duplicate referral attempt detected";
-
-                }
-
-
-                else if (
-                    eventType ===
-                    "STATUS_CHANGED"
-                ) {
-
-                    description =
-                        `Status changed from ${
-                            event.previous_status
-                            || "unknown"
-                        } to ${
-                            event.new_status
-                            || "unknown"
-                        }`;
-
-                }
-
-
-                return `
-
-                    <div
-                        class="history-event"
-                    >
-
-                        <strong>
-                            ${escapeHtml(
-                                description
-                            )}
-                        </strong>
-
-                        <br>
-
-                        ${escapeHtml(
-                            formatDate(
-                                event.timestamp
-                            )
-                        )}
-
-                        ${
-                            event.clinician_id
-                                ? `
-                                    <br>
-                                    Clinician:
-                                    ${escapeHtml(
-                                        event.clinician_id
-                                    )}
-                                  `
-                                : ""
-                        }
-
-                        ${
-                            event.encounter_id
-                                ? `
-                                    <br>
-                                    Encounter:
-                                    ${escapeHtml(
-                                        event.encounter_id
-                                    )}
-                                  `
-                                : ""
-                        }
-
-                    </div>
-
-                `;
-
-            }
-        )
-        .join("");
-
-}
-
-
-// ========================================================
-// UPDATE STATUS
-// ========================================================
-
-async function updateStatus(
-    referralId,
-    newStatus
-) {
-
-    if (!referralId) {
+        console.error(error);
 
         alert(
-            "Referral ID is missing."
+            "Unable to update referral status. " +
+            "Please try again."
         );
 
-        return;
+        if (button) {{
+            button.disabled = false;
+            button.textContent = "Update";
+        }}
 
-    }
+    }}
 
-
-    if (
-        ![
-            "UNDER_REVIEW",
-            "CONTACTED",
-            "SCREENING",
-            "ENROLLED",
-            "NOT_ELIGIBLE"
-        ].includes(
-            newStatus
-        )
-    ) {
-
-        alert(
-            "Invalid referral status."
-        );
-
-        return;
-
-    }
-
-
-    try {
-
-        const response =
-            await fetch(
-                `${STATUS_ENDPOINT}/${
-                    encodeURIComponent(
-                        referralId
-                    )
-                }/status`,
-                {
-                    method: "PATCH",
-
-                    headers: {
-                        "Content-Type":
-                            "application/json",
-
-                        "Accept":
-                            "application/json"
-                    },
-
-                    body: JSON.stringify(
-                        {
-                            status:
-                                newStatus
-                        }
-                    )
-                }
-            );
-
-
-        const data =
-            await response.json();
-
-
-        if (!response.ok) {
-
-            throw new Error(
-                data.message
-                || data.detail
-                || "Unable to update referral status."
-            );
-
-        }
-
-
-        await loadReferrals();
-
-
-    }
-
-    catch (error) {
-
-        console.error(
-            "Status update failed:",
-            error
-        );
-
-
-        alert(
-            `Unable to update referral status:\n\n${
-                error.message
-            }`
-        );
-
-    }
-
-}
-
-
-// ========================================================
-// INITIAL LOAD
-// ========================================================
-
-document.addEventListener(
-    "DOMContentLoaded",
-    () => {
-
-        loadReferrals();
-
-    }
-);
-
+}}
 
 </script>
 
@@ -2200,133 +1554,21 @@ document.addEventListener(
 
 </html>
 """
-    )
 
 
 # ============================================================
-# STATUS UPDATE API
+# SINGLE REFERRAL JSON VIEW
 # ============================================================
 
-@router.patch(
-    "/referrals/{referral_id}/status"
-)
-async def update_referral_status_endpoint(
-    referral_id: str,
-    payload: ReferralStatusUpdate,
-):
-    """
-    Update a referral's status.
+@router.get("/research/referrals/{referral_id}")
+def research_referral_detail(referral_id: str):
 
-    Example:
+    referral = get_referral(referral_id)
 
-    PATCH /referrals/HSR-12345678/status
-
-    {
-        "status": "SCREENING"
-    }
-    """
-
-    normalized_status = str(
-        payload.status or ""
-    ).strip().upper()
-
-
-    if normalized_status not in ALLOWED_STATUSES:
-
-        raise HTTPException(
-            status_code=400,
-
-            detail=(
-                f"Invalid status "
-                f"'{normalized_status}'. "
-                f"Allowed statuses: "
-                f"{', '.join(
-                    sorted(
-                        ALLOWED_STATUSES
-                    )
-                )}"
-            ),
-        )
-
-
-    existing_referral = get_referral(
-        referral_id
-    )
-
-
-    if existing_referral is None:
-
+    if not referral:
         raise HTTPException(
             status_code=404,
-
-            detail=(
-                f"Referral "
-                f"'{referral_id}' "
-                f"was not found."
-            ),
+            detail="Referral not found"
         )
-
-
-    try:
-
-        updated_referral = (
-            update_referral_status(
-                referral_id=
-                    referral_id,
-
-                status=
-                    normalized_status,
-            )
-        )
-
-
-        return {
-            "status": "success",
-            "message":
-                "Referral status updated.",
-            "referral":
-                updated_referral,
-        }
-
-
-    except ValueError as error:
-
-        raise HTTPException(
-            status_code=400,
-            detail=str(error),
-        )
-
-
-# ============================================================
-# SINGLE REFERRAL JSON ENDPOINT
-# ============================================================
-
-@router.get(
-    "/research/referrals/{referral_id}"
-)
-async def research_referral_detail(
-    referral_id: str,
-):
-    """
-    Return one referral for research-team tooling.
-    """
-
-    referral = get_referral(
-        referral_id
-    )
-
-
-    if referral is None:
-
-        raise HTTPException(
-            status_code=404,
-
-            detail=(
-                f"Referral "
-                f"'{referral_id}' "
-                f"was not found."
-            ),
-        )
-
 
     return referral
