@@ -1,4 +1,5 @@
 import json
+import re
 from typing import Any, Dict
 from urllib.parse import urlencode
 
@@ -38,7 +39,7 @@ app = FastAPI(
         "HeLaSync clinical trial matching, "
         "CDS Hooks, and clinical research referral API"
     ),
-    version="1.5.0-STAGE3A5",
+    version="1.5.1-STAGE3A5-LINKFIX",
 )
 
 
@@ -81,14 +82,18 @@ runner = Runner(
 # RESEARCH REFERRAL DASHBOARD
 # ============================================================
 
-app.include_router(research_router)
+app.include_router(
+    research_router
+)
 
 
 # ============================================================
-# STAGE 2D REFERRAL LAUNCH WORKFLOW
+# HELASYNC SMART APP / REFERRAL LAUNCH
 # ============================================================
 
-app.include_router(referral_launch_router)
+app.include_router(
+    referral_launch_router
+)
 
 
 # ============================================================
@@ -102,7 +107,7 @@ async def root():
         "message": "HeLaSync API is running",
         "status": "healthy",
         "pipeline": "5-agent clinical trial matching pipeline",
-        "version": "1.5.0-STAGE3A5",
+        "version": "1.5.1-STAGE3A5-LINKFIX",
     }
 
 
@@ -178,9 +183,7 @@ async def cds_services():
     """
 
     return {
-
         "services": [
-
             {
                 "hook": "patient-view",
 
@@ -197,7 +200,6 @@ async def cds_services():
                 "id": "helasync",
 
                 "prefetch": {
-
                     "patient":
                         "Patient/{{context.patientId}}",
 
@@ -212,9 +214,7 @@ async def cds_services():
                         "patient={{context.patientId}}",
                 },
             }
-
         ]
-
     }
 
 
@@ -240,11 +240,15 @@ async def helasync_cds(
             ↓
     HeLaSync 5-Agent Pipeline
             ↓
-    CDS Hooks Card
+    Agent 5 CDS Card
             ↓
-    Review & Refer
+    Additional Information
             ↓
-    HeLaSync Referral Workflow
+    HeLaSync Smart App
+            ↓
+    Review Eligibility
+            ↓
+    Refer Patient
     """
 
     try:
@@ -295,7 +299,6 @@ async def helasync_cds(
             if resource is None:
                 continue
 
-
             # Some CDS Hooks environments return
             # a Bundle.
             if (
@@ -318,7 +321,6 @@ async def helasync_cds(
                                     entry["resource"]
                             }
                         )
-
 
             else:
 
@@ -398,7 +400,6 @@ async def helasync_cds(
 
 
         prompt = f"""
-
 You are processing a CDS Hooks patient-view
 request for HeLaSync.
 
@@ -417,7 +418,11 @@ Patient context:
 
 Original CDS Hooks context:
 
-{json.dumps(context, indent=2, default=str)}
+{json.dumps(
+    context,
+    indent=2,
+    default=str,
+)}
 
 Return the final CDS Hooks response generated
 by the HeLaSync 5-agent pipeline.
@@ -431,13 +436,9 @@ The response must be valid JSON.
         # ====================================================
 
         session = await session_service.create_session(
-
             app_name=APP_NAME,
-
             user_id=user_id,
-
             session_id=hook_instance,
-
         )
 
 
@@ -511,7 +512,6 @@ The response must be valid JSON.
                     final_output
                 )
 
-
             except json.JSONDecodeError:
 
                 # Handle accidental Markdown
@@ -540,7 +540,6 @@ The response must be valid JSON.
                     result = json.loads(
                         cleaned_output
                     )
-
 
                 except json.JSONDecodeError:
 
@@ -576,7 +575,6 @@ The response must be valid JSON.
                         ]
 
                     }
-
 
         else:
 
@@ -623,71 +621,75 @@ The response must be valid JSON.
 
 
         # ====================================================
-        # 11. STAGE 2D
+        # 11. STAGE 3A.5 LINK FIX
         #
-        # CREATE CLINICIAN REFERRAL WORKFLOW LINK
+        # CONNECT CDS CARD TO HELASYNC SMART APP
         # ====================================================
 
         for card in cards:
+
+            # ------------------------------------------------
+            # Get text from BOTH summary and detail.
+            #
+            # This is important because Agent 5 may put
+            # the trial ID in either field.
+            # ------------------------------------------------
+
+            summary = card.get(
+                "summary",
+                "",
+            )
 
             detail = card.get(
                 "detail",
                 "",
             )
 
+            combined_text = (
+                f"{summary}\n{detail}"
+            )
+
+
+            # ------------------------------------------------
+            # Extract NCT-style trial ID.
+            #
+            # Examples:
+            #
+            # NCTFAKE001
+            # NCTFAKE002
+            # NCTFAKE003
+            #
+            # This does NOT depend on parentheses.
+            # ------------------------------------------------
+
+            trial_match = re.search(
+                r"\b(NCT[A-Za-z0-9_-]+)\b",
+                combined_text,
+                re.IGNORECASE,
+            )
+
             trial_id = None
 
+            if trial_match:
 
-            # ------------------------------------------------
-            # Extract trial ID from the Agent 5 card.
-            #
-            # Expected format:
-            #
-            # Trial: HeLaSync Heart Failure Treatment Study
-            # (NCTFAKE003)
-            # ------------------------------------------------
-
-            if (
-                "(" in detail
-                and ")" in detail
-            ):
-
-                possible_trial_id = (
-
-                    detail
-
-                    .split("(")[-1]
-
-                    .split(")")[0]
-
+                trial_id = (
+                    trial_match
+                    .group(1)
                     .strip()
-
                 )
 
 
-                if possible_trial_id.startswith(
-                    "NCT"
-                ):
-
-                    trial_id = (
-                        possible_trial_id
-                    )
-
-
             # ------------------------------------------------
-            # Build clinician referral workflow URL
+            # Build Smart App URL.
             # ------------------------------------------------
 
             if trial_id:
 
                 referral_url = (
-
                     "https://helasync.onrender.com"
                     "/referral-launch?"
                     + urlencode(
-
                         {
-
                             "trial_id":
                                 trial_id,
 
@@ -702,24 +704,19 @@ The response must be valid JSON.
 
                             "hook_instance":
                                 hook_instance,
-
                         }
-
                     )
-
                 )
 
 
-                # ====================================================
+                # ------------------------------------------------
                 # STAGE 3A.5
-                # CONNECT CDS HOOKS TO THE HELASYNC SMART APP
                 #
-                # Additional Information is now the Smart App entry
-                # point. The Smart App receives the trial, patient,
-                # clinician, encounter, and hook context so the
-                # clinician can review the trial and refer the patient
-                # from one workflow.
-                # ====================================================
+                # Additional Information now opens the
+                # HeLaSync Smart App.
+                #
+                # The old Lovable URL is intentionally removed.
+                # ------------------------------------------------
 
                 card["links"] = [
 
@@ -734,33 +731,48 @@ The response must be valid JSON.
                         "type":
                             "absolute",
 
-                    },
+                    }
 
                 ]
+
+
+                # ------------------------------------------------
+                # Render-safe logging.
+                #
+                # We log the trial ID and destination but do NOT
+                # log patient identifiers.
+                # ------------------------------------------------
+
+                print(
+                    "[Stage 3A.5] "
+                    f"Smart App link generated for {trial_id}: "
+                    f"{referral_url}"
+                )
 
 
             else:
 
-                # If no trial ID is found,
-                # preserve the existing
-                # Additional Information link.
+                # ------------------------------------------------
+                # IMPORTANT:
+                #
+                # Never send the clinician to the old
+                # helasync.app/launch application.
+                #
+                # If no trial ID can be identified, remove
+                # the link rather than sending the clinician
+                # to an unrelated application.
+                # ------------------------------------------------
 
-                card["links"] = [
+                card.pop(
+                    "links",
+                    None
+                )
 
-                    {
-
-                        "label":
-                            "Additional Information",
-
-                        "url":
-                            "https://helasync.app/launch",
-
-                        "type":
-                            "absolute",
-
-                    }
-
-                ]
+                print(
+                    "[Stage 3A.5] "
+                    "No trial ID found in CDS card. "
+                    "Smart App link was not generated."
+                )
 
 
         # ====================================================
@@ -768,10 +780,7 @@ The response must be valid JSON.
         # ====================================================
 
         return {
-
-            "cards":
-                cards
-
+            "cards": cards
         }
 
 
@@ -780,6 +789,11 @@ The response must be valid JSON.
         # ====================================================
         # ERROR RESPONSE
         # ====================================================
+
+        print(
+            "[HeLaSync CDS Error]",
+            str(e)
+        )
 
         return {
 
@@ -895,7 +909,6 @@ async def create_referral_endpoint(
             ),
 
         )
-
 
         return referral
 
