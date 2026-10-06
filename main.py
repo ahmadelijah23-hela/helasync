@@ -38,7 +38,7 @@ app = FastAPI(
         "HeLaSync clinical trial matching, "
         "CDS Hooks, and clinical research referral API"
     ),
-    version="1.4.0-STAGE2D",
+    version="1.5.0-STAGE3A5",
 )
 
 
@@ -102,7 +102,7 @@ async def root():
         "message": "HeLaSync API is running",
         "status": "healthy",
         "pipeline": "5-agent clinical trial matching pipeline",
-        "version": "1.4.0-STAGE2D",
+        "version": "1.5.0-STAGE3A5",
     }
 
 
@@ -710,20 +710,18 @@ The response must be valid JSON.
                 )
 
 
+                # ====================================================
+                # STAGE 3A.5
+                # CONNECT CDS HOOKS TO THE HELASYNC SMART APP
+                #
+                # Additional Information is now the Smart App entry
+                # point. The Smart App receives the trial, patient,
+                # clinician, encounter, and hook context so the
+                # clinician can review the trial and refer the patient
+                # from one workflow.
+                # ====================================================
+
                 card["links"] = [
-
-                    {
-
-                        "label":
-                            "Review & Refer to HeLaSync",
-
-                        "url":
-                            referral_url,
-
-                        "type":
-                            "absolute",
-
-                    },
 
                     {
 
@@ -731,7 +729,7 @@ The response must be valid JSON.
                             "Additional Information",
 
                         "url":
-                            "https://helasync.app/launch",
+                            referral_url,
 
                         "type":
                             "absolute",
