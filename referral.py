@@ -4,15 +4,7 @@ from uuid import uuid4
 
 
 # ============================================================
-# HElaSYNC TRIAL ROUTING REGISTRY
-# ============================================================
-#
-# Stage 2 prototype:
-#
-# trial ID → research team
-#
-# In production this should eventually come from a secure
-# database/configuration service rather than hard-coded values.
+# CLINICAL TRIAL ROUTING
 # ============================================================
 
 TRIAL_ROUTING = {
@@ -22,14 +14,12 @@ TRIAL_ROUTING = {
         "research_team": "HeLaSync Research Team A",
         "contact": "research-team-a@helasync.org",
     },
-
     "NCTFAKE002": {
         "trial_id": "NCTFAKE002",
         "trial_name": "Cardiac Amyloidosis Heart Failure Study",
         "research_team": "HeLaSync Research Team B",
         "contact": "research-team-b@helasync.org",
     },
-
     "NCTFAKE003": {
         "trial_id": "NCTFAKE003",
         "trial_name": "HeLaSync Heart Failure Treatment Study",
@@ -42,28 +32,94 @@ TRIAL_ROUTING = {
 # ============================================================
 # IN-MEMORY REFERRAL STORE
 # ============================================================
-#
-# Stage 2 prototype only.
-#
-# Render instances are ephemeral, so this is NOT production
-# persistence.
-#
-# Later we will replace this with a database.
-# ============================================================
 
-REFERRALS = {}
+REFERRALS: Dict[str, Dict[str, Any]] = {}
 
 
 # ============================================================
-# GET TRIAL ROUTING
+# TRIAL LOOKUP
 # ============================================================
 
-def get_trial_routing(trial_id: str) -> Optional[Dict[str, Any]]:
+def get_trial_routing(
+    trial_id: str,
+) -> Optional[Dict[str, Any]]:
     """
-    Return routing information for a specific trial.
+    Return routing information for a clinical trial.
     """
 
     return TRIAL_ROUTING.get(trial_id)
+
+
+# ============================================================
+# DUPLICATE REFERRAL CHECK
+# ============================================================
+
+def find_existing_referral(
+    trial_id: str,
+    patient_id: str,
+    clinician_id: Optional[str] = None,
+    encounter_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Check whether an active referral already exists for
+    the same patient, clinical trial, and encounter.
+
+    This prevents accidental duplicate referrals when a
+    clinician clicks Submit Referral more than once.
+
+    Duplicate matching logic:
+
+        Same trial
+        +
+        Same patient
+        +
+        Same encounter
+
+    If an encounter ID is not available, the system falls
+    back to matching patient + trial.
+    """
+
+    for referral in REFERRALS.values():
+
+        referral_trial_id = (
+            referral.get("trial", {}).get("trial_id")
+        )
+
+        referral_patient_id = (
+            referral.get("patient", {}).get("patient_id")
+        )
+
+        referral_encounter_id = (
+            referral.get("encounter_id")
+        )
+
+        if referral_trial_id != trial_id:
+            continue
+
+        if referral_patient_id != patient_id:
+            continue
+
+        # ----------------------------------------------------
+        # Strongest duplicate check:
+        # patient + trial + encounter
+        # ----------------------------------------------------
+
+        if encounter_id:
+
+            if referral_encounter_id == encounter_id:
+                return referral
+
+            continue
+
+        # ----------------------------------------------------
+        # Fallback:
+        # patient + trial
+        # ----------------------------------------------------
+
+        if not encounter_id:
+            return referral
+
+    return None
 
 
 # ============================================================
@@ -80,7 +136,7 @@ def create_referral(
 ) -> Dict[str, Any]:
 
     # --------------------------------------------------------
-    # Validate trial
+    # Verify trial exists
     # --------------------------------------------------------
 
     trial = get_trial_routing(trial_id)
@@ -92,17 +148,41 @@ def create_referral(
 
 
     # --------------------------------------------------------
-    # Generate referral ID
+    # Check for existing referral
     # --------------------------------------------------------
 
-    referral_id = f"HSR-{uuid4().hex[:12].upper()}"
+    existing_referral = find_existing_referral(
+        trial_id=trial_id,
+        patient_id=patient_id,
+        clinician_id=clinician_id,
+        encounter_id=encounter_id,
+    )
+
+    if existing_referral is not None:
+
+        # Add a flag so the caller knows this was
+        # an existing referral rather than a new one.
+
+        existing_referral["duplicate_prevented"] = True
+
+        return existing_referral
 
 
     # --------------------------------------------------------
-    # Create referral
+    # Generate unique referral ID
+    # --------------------------------------------------------
+
+    referral_id = (
+        f"HSR-{uuid4().hex[:12].upper()}"
+    )
+
+
+    # --------------------------------------------------------
+    # Create referral record
     # --------------------------------------------------------
 
     referral = {
+
         "referral_id": referral_id,
 
         "trial": {
@@ -129,18 +209,13 @@ def create_referral(
 
         "source": source,
 
-        "created_at": datetime.now(
-            timezone.utc
-        ).isoformat(),
-
-        # ----------------------------------------------------
-        # IMPORTANT:
-        #
-        # Patient data should NOT be placed here until it has
-        # passed through the Privacy Gateway.
-        # ----------------------------------------------------
+        "created_at": (
+            datetime.now(timezone.utc).isoformat()
+        ),
 
         "patient_data": patient_data or {},
+
+        "duplicate_prevented": False,
     }
 
 
@@ -155,7 +230,7 @@ def create_referral(
 
 
 # ============================================================
-# GET REFERRAL
+# GET SINGLE REFERRAL
 # ============================================================
 
 def get_referral(
@@ -168,7 +243,7 @@ def get_referral(
 
 
 # ============================================================
-# LIST REFERRALS
+# LIST ALL REFERRALS
 # ============================================================
 
 def list_referrals():
