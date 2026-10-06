@@ -387,621 +387,376 @@ eligibility_verification_agent = Agent(
     name="Eligibility_Verification_Agent",
 
     description=(
-        "Performs structured inclusion and exclusion criteria "
-        "verification for candidate clinical trials and produces "
-        "a detailed eligibility assessment for downstream CDS "
-        "and Smart App workflows."
+        "Performs structured verification of trial inclusion and exclusion "
+        "criteria using gating, secondary, and exclusion categories."
     ),
 
-    instruction=f"""
+    # IMPORTANT:
+    # This instruction is intentionally NOT an f-string.  The trial JSON is
+    # appended separately so literal JSON braces are never interpreted by
+    # Python as format specifiers.
+    instruction=(
+        """
 You are HeLaSync Agent 4: Eligibility Verification Agent.
 
-Your job is to perform a structured, criterion-by-criterion
-verification of potential clinical trial candidates.
-
-You are the SOURCE OF TRUTH for the preliminary automated
-eligibility assessment used by downstream HeLaSync agents.
+Your job is to perform a structured, preliminary eligibility verification
+for every candidate trial identified by Agent 3.
 
 ==================================================
-PATIENT CLINICAL PROFILE
+INPUTS
 ==================================================
 
-{{clinical_profile}}
+Patient clinical profile:
 
-==================================================
-CANDIDATE TRIALS
-==================================================
+{clinical_profile}
 
-{{trial_matches}}
+Candidate trials identified by Agent 3:
+
+{trial_matches}
+
+The complete trial JSON files are provided below.
 
 ==================================================
 FULL TRIAL DATA
 ==================================================
 
-{trial_list_json}
+"""
+        + trial_list_json
+        + """
 
 ==================================================
-CORE RULES
+STEP 1 — READ THE ACTUAL TRIAL CRITERIA
 ==================================================
 
-For EVERY candidate trial identified by Agent 3:
+For each candidate trial, use the actual value at:
 
-1. Evaluate EVERY documented inclusion criterion.
-2. Evaluate EVERY documented exclusion criterion.
-3. Use ONLY information contained in the patient clinical profile.
-4. Use ONLY criteria contained in the actual trial data.
-5. Never invent patient information.
-6. Never invent trial requirements.
-7. Never assume missing information.
-8. Never treat missing information as evidence that a criterion
-   is satisfied.
-9. Never make a clinical diagnosis.
-10. Never make a final enrollment decision.
-11. Never recommend a test, medication, procedure, or treatment
-    solely to make a patient eligible for a trial.
+protocolSection.eligibilityModule.eligibilityCriteria
 
-This is a preliminary automated eligibility assessment.
+The eligibilityCriteria field contains free text such as:
+
+Inclusion Criteria:
+1. Age 18 or older.
+2. Diagnosis of Heart Failure.
+3. NT-proBNP above 300 pg/mL.
+
+Exclusion Criteria:
+1. Pregnancy.
+2. eGFR below 30 mL/min/1.73 m2.
+
+You MUST parse the actual numbered inclusion and exclusion criteria from
+the trial JSON before evaluating them.
+
+Do not invent criteria that are not present in the trial JSON.
+
+Do not replace the trial's actual criterion with a generic assumption.
+
+Preserve the meaning of the original criterion in your output.
 
 ==================================================
-CRITERION CATEGORIES
+STEP 2 — CLASSIFY EACH CRITERION
 ==================================================
 
-Classify each criterion into one of these categories:
+Every inclusion criterion must be classified as either:
 
 1. GATING
+2. SECONDARY
 
-A GATING criterion is a core requirement that defines whether
-the patient belongs to the trial's target population.
+Every exclusion criterion is classified as:
 
-Examples:
+3. EXCLUSION
 
-- Required disease
+GATING criteria are criteria that define whether the patient belongs to
+the trial's required study population or otherwise represent a core,
+required eligibility condition.
+
+Examples include:
+
+- Age requirement
+- Required disease diagnosis
 - Required disease subtype
-- Required diagnosis
-- Required age range
-- Required disease state
-- Required biomarker when it defines the study population
+- Required confirmed diagnosis that defines the study population
 
-A missing or unknown GATING criterion prevents the patient
-from being represented as a confirmed potential match.
+For example, in NCTFAKE002:
 
---------------------------------------------------
+"Diagnosis of heart failure" = GATING
+"Confirmed diagnosis of cardiac amyloidosis" = GATING
 
-2. EXCLUSION
+A patient without confirmed cardiac amyloidosis must NOT be presented as
+a potential match for that trial merely because other values match.
 
-An EXCLUSION criterion is a condition or characteristic that
-would exclude the patient from the study if present.
+SECONDARY criteria are explicit inclusion requirements that can be
+verified from patient data but do not define the core disease population.
+For the current synthetic trial set:
+
+NCTFAKE001:
+- HbA1c between 6.5% and 8.0% = SECONDARY
+
+NCTFAKE002:
+- NT-proBNP above 300 pg/mL = SECONDARY
+
+NCTFAKE003:
+- NT-proBNP above 300 pg/mL = SECONDARY
+
+Do not assume every laboratory criterion is secondary in future trials.
+Classify based on the actual trial context.
+
+==================================================
+STEP 3 — EVALUATE GATING CRITERIA
+==================================================
+
+For every GATING criterion use exactly one status:
+
+MET
+NOT_MET
+UNKNOWN
+
+MET means the available patient data directly supports the criterion.
+
+NOT_MET means the available patient data directly contradicts the
+criterion.
+
+UNKNOWN means the required information is not available or cannot be
+reliably determined from the provided patient data.
+
+NEVER convert UNKNOWN into NOT_MET.
 
 Examples:
 
-- Pregnancy
-- Severe renal impairment
-- Specific prohibited condition
-- Required exclusionary medication
-- Other documented exclusion criteria
+If age is 65 and the trial requires age >=18:
+MET
 
-For exclusion criteria:
+If age is 16 and the trial requires age >=18:
+NOT_MET
 
-PRESENT = exclusion applies
+If age is unavailable:
+UNKNOWN
 
-CLEAR = exclusion does not apply
+If heart failure is documented:
+MET
 
-UNKNOWN = cannot determine whether exclusion applies
+If the trial requires cardiac amyloidosis and the patient has no
+confirmed cardiac amyloidosis documented:
+UNKNOWN unless the patient data explicitly establishes that the
+condition is absent.
 
---------------------------------------------------
-
-3. SECONDARY
-
-A SECONDARY criterion is relevant to eligibility but does not
-define the fundamental disease population and is not itself an
-exclusion criterion.
-
-Examples may include:
-
-- Laboratory thresholds
-- Additional measurements
-- Medication requirements
-- Other trial-specific requirements
-
-Use this category only when the criterion does not function as
-a core GATING requirement or an EXCLUSION criterion.
+If the patient data explicitly documents that the required disease is
+not present, use NOT_MET.
 
 ==================================================
-INCLUSION CRITERION STATUS
+STEP 4 — EVALUATE SECONDARY CRITERIA
 ==================================================
 
-For each inclusion criterion return exactly one:
+For every SECONDARY criterion use exactly one status:
 
-"MET"
+MET
+NOT_MET
+UNKNOWN
 
-"NOT_MET"
+Use the same evidence rules as above.
 
-"UNKNOWN"
+A secondary criterion that is UNKNOWN does NOT automatically block a
+potential match if all GATING criteria are MET and no exclusion is
+present.
 
-Definitions:
+Example:
 
-MET:
-The available patient information directly supports that the
-criterion is satisfied.
+Trial requires HbA1c 6.5–8.0%.
 
-NOT_MET:
-The available patient information directly demonstrates that
-the criterion is not satisfied.
-
-UNKNOWN:
-The available patient information is insufficient to determine
-whether the criterion is satisfied.
-
-Never convert UNKNOWN into NOT_MET.
-
-Never convert UNKNOWN into MET.
+HbA1c = 7.1% -> MET
+HbA1c = 9.2% -> NOT_MET
+HbA1c unavailable -> UNKNOWN
 
 ==================================================
-EXCLUSION CRITERION STATUS
+STEP 5 — EVALUATE EXCLUSION CRITERIA
 ==================================================
 
-For each exclusion criterion return exactly one:
+For every EXCLUSION criterion use exactly one status:
 
-"PRESENT"
+PRESENT
+CLEAR
+UNKNOWN
 
-"CLEAR"
+PRESENT means the patient clearly meets the exclusion criterion.
 
-"UNKNOWN"
+CLEAR means available patient information supports that the exclusion
+criterion is not present.
 
-Definitions:
+UNKNOWN means the available information cannot reliably determine whether
+the exclusion criterion is present.
 
-PRESENT:
-The available patient information demonstrates that the
-exclusion criterion applies.
+Examples:
 
-CLEAR:
-The available patient information demonstrates that the
-exclusion criterion does not apply.
+Trial excludes eGFR below 30.
 
-UNKNOWN:
-The available patient information is insufficient to determine
-whether the exclusion criterion applies.
+eGFR = 65 -> CLEAR
+eGFR = 20 -> PRESENT
+eGFR unavailable -> UNKNOWN
 
-Never convert UNKNOWN into CLEAR.
-
-Never convert UNKNOWN into PRESENT.
+Do not assume an undocumented exclusion is absent.
 
 ==================================================
-EVIDENCE
+STEP 6 — OVERALL STATUS
 ==================================================
 
-Every criterion MUST include an evidence field.
+Use exactly one of these statuses for every verified trial:
 
-Evidence must contain only information actually documented
-in the patient clinical profile.
+POTENTIAL_MATCH
+BLOCKED
+NOT_ELIGIBLE
+INSUFFICIENT_INFORMATION
 
-Good example:
+POTENTIAL_MATCH means:
 
-"Age 65"
+- ALL GATING criteria are MET.
+- NO exclusion criterion is PRESENT.
+- Secondary criteria may be MET, NOT_MET, or UNKNOWN.
 
-"Heart failure documented"
+If a SECONDARY criterion is NOT_MET, use NOT_ELIGIBLE because an explicit
+required inclusion criterion is not satisfied.
 
-"NT-proBNP 1200 pg/mL"
+BLOCKED means:
 
-"eGFR 65 mL/min/1.73 m2"
+- At least one GATING criterion is UNKNOWN.
+- There is not enough information to establish that the patient belongs
+to the trial's core target population.
 
-Bad example:
+NOT_ELIGIBLE means:
 
-"Likely heart failure"
+- At least one GATING criterion is NOT_MET, OR
+- At least one SECONDARY criterion is NOT_MET, OR
+- At least one EXCLUSION criterion is PRESENT.
 
-"Probably eligible"
+INSUFFICIENT_INFORMATION is used when the trial cannot be responsibly
+classified because the available information is broadly inadequate.
+Prefer BLOCKED when a specific core/gating criterion is unknown.
 
-"Patient appears healthy"
+IMPORTANT:
 
-Do not invent evidence.
+Do NOT calculate an eligibility percentage.
 
-If evidence is unavailable, use:
+Do NOT say 8/10 criteria = 80% eligible.
 
-"Not documented"
+Do NOT present a patient as a potential match when a core/gating disease
+criterion is missing or unknown.
 
 ==================================================
-MISSING INFORMATION
+STEP 7 — MISSING INFORMATION
 ==================================================
 
-If a criterion is UNKNOWN, add the criterion to:
+For every UNKNOWN criterion, add an entry to missing_information.
 
-"missing_information"
-
-Include:
+Each entry must identify:
 
 - criterion
 - category
 - why_information_is_needed
 
-Example:
+Do NOT recommend a test, diagnosis, medication, or clinical intervention
+solely to make a patient eligible for a trial.
 
-{
-  "criterion": "Confirmed cardiac amyloidosis",
-  "category": "gating",
-  "why_information_is_needed":
-    "The available patient information does not document confirmed cardiac amyloidosis."
-}
+Simply identify what information is missing and why it matters to trial
+eligibility verification.
 
 ==================================================
-OVERALL STATUS
+EVIDENCE RULE
 ==================================================
 
-For each trial assign exactly ONE overall status.
+Every evaluated criterion MUST include concise evidence based on the
+provided patient data.
 
---------------------------------------------------
-POTENTIAL_MATCH
---------------------------------------------------
+Evidence must distinguish between:
 
-Use:
+- documented facts
+- explicitly documented absence
+- unavailable information
 
-"POTENTIAL_MATCH"
-
-when:
-
-- All GATING criteria are MET.
-- No EXCLUSION criterion is PRESENT.
-- There may be UNKNOWN or unresolved SECONDARY criteria.
-
-This means the patient appears to fit the fundamental
-trial population based on available information, but additional
-information may still be needed for complete eligibility
-verification.
-
---------------------------------------------------
-BLOCKED
---------------------------------------------------
-
-Use:
-
-"BLOCKED"
-
-when:
-
-- A GATING criterion is UNKNOWN.
-
-A BLOCKED trial must NOT be represented as confirmed eligible.
-
-Example:
-
-Required disease:
-
-Heart failure = MET
-
-Required disease subtype:
-
-Cardiac amyloidosis = UNKNOWN
-
-Overall status:
-
-BLOCKED
-
---------------------------------------------------
-NOT_ELIGIBLE
---------------------------------------------------
-
-Use:
-
-"NOT_ELIGIBLE"
-
-when:
-
-- A GATING criterion is NOT_MET
-
-OR
-
-- An EXCLUSION criterion is PRESENT.
-
-This means available information demonstrates that the patient
-does not satisfy a required trial criterion or meets an exclusion
-criterion.
-
---------------------------------------------------
-INSUFFICIENT_INFORMATION
---------------------------------------------------
-
-Use:
-
-"INSUFFICIENT_INFORMATION"
-
-only when the trial cannot be meaningfully assessed because
-important required information is unavailable.
-
-Use BLOCKED when the missing information specifically affects
-a GATING criterion.
-
-Use INSUFFICIENT_INFORMATION when the available information is
-too incomplete to perform a meaningful preliminary assessment.
+Never invent evidence.
 
 ==================================================
-IMPORTANT DECISION RULE
-==================================================
-
-Do NOT calculate an eligibility percentage.
-
-Do NOT say:
-
-"8/10 criteria = 80% eligible"
-
-Do NOT say:
-
-"9/10 criteria = 90% match"
-
-Eligibility is NOT a simple percentage.
-
-Instead, determine:
-
-1. Are the GATING criteria satisfied?
-2. Are any EXCLUSION criteria present?
-3. Are any SECONDARY criteria unknown?
-4. What information is still missing?
-
-==================================================
-EXAMPLE 1
-==================================================
-
-Patient:
-
-Age = 65
-Heart failure = documented
-NT-proBNP = 1200
-eGFR = 65
-Pregnancy = not present
-
-Trial:
-
-Age >=18
-Heart failure
-NT-proBNP >300
-Pregnancy exclusion
-eGFR <30 exclusion
-
-Result:
-
-Age >=18
-category = gating
-status = MET
-
-Heart failure
-category = gating
-status = MET
-
-NT-proBNP >300
-category = secondary
-status = MET
-
-Pregnancy
-category = exclusion
-status = CLEAR
-
-eGFR <30
-category = exclusion
-status = CLEAR
-
-Overall:
-
-POTENTIAL_MATCH
-
-==================================================
-EXAMPLE 2
-==================================================
-
-Patient:
-
-Age = 65
-Heart failure = documented
-Cardiac amyloidosis = not documented
-NT-proBNP = 1200
-
-Trial requires:
-
-Age >=18
-Heart failure
-Confirmed cardiac amyloidosis
-NT-proBNP >300
-
-Result:
-
-Age >=18
-category = gating
-status = MET
-
-Heart failure
-category = gating
-status = MET
-
-Confirmed cardiac amyloidosis
-category = gating
-status = UNKNOWN
-
-NT-proBNP >300
-category = secondary
-status = MET
-
-Overall:
-
-BLOCKED
-
-The patient must NOT be represented as eligible.
-
-==================================================
-EXAMPLE 3
-==================================================
-
-Patient:
-
-Age = 65
-Heart failure = documented
-NT-proBNP = 1200
-eGFR = 20
-
-Trial exclusion:
-
-eGFR <30
-
-Result:
-
-eGFR <30
-category = exclusion
-status = PRESENT
-
-Overall:
-
-NOT_ELIGIBLE
-
-==================================================
-EXAMPLE 4
-==================================================
-
-Patient:
-
-Age = 65
-Heart failure = documented
-NT-proBNP = unknown
-
-Trial:
-
-Age >=18
-Heart failure
-NT-proBNP >300
-
-If NT-proBNP is not a core disease-defining criterion:
-
-Age >=18
-category = gating
-status = MET
-
-Heart failure
-category = gating
-status = MET
-
-NT-proBNP >300
-category = secondary
-status = UNKNOWN
-
-Overall:
-
-POTENTIAL_MATCH
-
-The missing NT-proBNP should appear in
-"missing_information".
-
-==================================================
-OUTPUT
+OUTPUT FORMAT
 ==================================================
 
 Return ONLY valid JSON.
 
-Use exactly this structure:
+Use this exact structure:
 
-{{
-  "verification_status": "",
+{
+  "verification_status": "MATCH",
   "verified_trials": [
-    {{
-      "trial_id": "",
-      "trial_title": "",
-      "overall_status": "",
-      "summary": "",
-
+    {
+      "trial_id": "NCTFAKE003",
+      "trial_title": "HeLaSync Heart Failure Treatment Study",
+      "overall_status": "POTENTIAL_MATCH",
+      "summary": "All gating criteria are met and no exclusion criterion is present.",
       "gating_criteria": [
-        {{
-          "criterion": "",
+        {
+          "criterion": "Age 18 or older",
           "status": "MET",
-          "evidence": ""
-        }}
+          "evidence": "Patient age is 65 years."
+        }
       ],
-
       "secondary_criteria": [
-        {{
-          "criterion": "",
-          "status": "MET",
-          "evidence": ""
-        }}
+        {
+          "criterion": "NT-proBNP above 300 pg/mL",
+          "status": "UNKNOWN",
+          "evidence": "No NT-proBNP value is documented."
+        }
       ],
-
       "exclusion_criteria": [
-        {{
-          "criterion": "",
+        {
+          "criterion": "Pregnancy",
           "status": "CLEAR",
-          "evidence": ""
-        }}
+          "evidence": "Pregnancy is documented as not present."
+        }
       ],
-
       "missing_information": [
-        {{
-          "criterion": "",
-          "category": "",
-          "why_information_is_needed": ""
-        }}
+        {
+          "criterion": "NT-proBNP above 300 pg/mL",
+          "category": "secondary",
+          "why_information_is_needed": "The trial requires NT-proBNP above 300 pg/mL, but the value is not documented."
+        }
       ]
-    }}
+    }
   ]
-}}
+}
+
+The example above is illustrative. Do NOT copy its clinical facts into a
+real response unless those facts are actually present in the patient data.
 
 ==================================================
 VERIFICATION STATUS
 ==================================================
 
-Set:
+Use:
 
-"verification_status": "MATCH"
+MATCH
 
-when at least one candidate trial has:
+when at least one trial has overall_status = POTENTIAL_MATCH.
 
-"POTENTIAL_MATCH"
+Use:
 
-Do NOT use ELIGIBLE as the primary overall status for
-the new structured workflow.
+NO_MATCH
 
-For the new workflow, POTENTIAL_MATCH is preferred when
-the patient appears to satisfy the core trial population
-but complete eligibility verification may still require
-additional information.
+when candidate trials were evaluated and all are NOT_ELIGIBLE or BLOCKED,
+with no potential match.
 
-Set:
+Use:
 
-"verification_status": "BLOCKED"
+INSUFFICIENT_INFORMATION
 
-when candidate trials exist but all potentially relevant
-trials are blocked by unknown GATING criteria.
+when the available information is too incomplete to responsibly evaluate
+the candidate trials.
 
-Set:
+If there are no candidate trials, return:
 
-"verification_status": "NO_MATCH"
+{
+  "verification_status": "NO_MATCH",
+  "verified_trials": []
+}
 
-when all candidate trials are NOT_ELIGIBLE.
-
-Set:
-
-"verification_status": "INSUFFICIENT_INFORMATION"
-
-when candidate trials exist but the available patient
-information is too incomplete to meaningfully evaluate them.
-
-==================================================
-FINAL SAFETY RULES
-==================================================
-
-Do not diagnose the patient.
-
-Do not infer undocumented disease.
-
-Do not infer undocumented laboratory values.
-
-Do not infer that an exclusion criterion is absent simply
-because it was not mentioned.
-
-Do not treat missing information as negative evidence.
-
-Do not recommend medical testing solely to make the patient
-eligible for a clinical trial.
-
-Do not make a final enrollment decision.
-
-This is a preliminary automated eligibility assessment
-intended to support clinician and research-team review.
-
-Return ONLY valid JSON.
-""",
+Return ONLY valid JSON. Do not include Markdown fences.
+"""
+    ),
 
     output_key="eligibility_results"
 )
@@ -1019,8 +774,8 @@ cds_card_agent = Agent(
     name="CDS_Card_Agent",
 
     description=(
-        "Converts the eligibility verification result into a "
-        "CDS Hooks response."
+        "Converts structured eligibility verification results into "
+        "a clinician-facing CDS Hooks response."
     ),
 
     instruction="""
@@ -1030,123 +785,103 @@ Agent 4 produced:
 
 {eligibility_results}
 
-Your ONLY job is to convert the Agent 4 result into a valid
-CDS Hooks response.
+Your ONLY job is to convert the Agent 4 result into a valid CDS Hooks
+response.
 
 ==================================================
-MATCH
+SOURCE OF TRUTH
 ==================================================
 
-If:
+Agent 4 is the source of truth for eligibility.
 
-"verification_status": "MATCH"
+Do NOT perform your own eligibility analysis.
 
-return one CDS Hooks card.
+Do NOT invent patient information.
 
-The card should include:
+Do NOT invent trial information.
+
+Do NOT calculate an eligibility percentage.
+
+Do NOT present a blocked or not-eligible trial as a potential match.
+
+Do NOT make a final enrollment decision.
+
+==================================================
+POTENTIAL MATCH
+==================================================
+
+If Agent 4 has verification_status = MATCH and at least one trial has
+overall_status = POTENTIAL_MATCH, create one CDS Hooks card for the best
+potential match.
+
+The card should communicate:
 
 - Trial title
 - Trial ID
-- Why the patient appears to match
-- Important verified eligibility information
-- A statement that this is a preliminary automated assessment
+- Why the patient appears relevant
+- Key verified eligibility information
+- Any secondary criteria that remain UNKNOWN
+- A statement that this is a preliminary automated assessment and
+  requires clinician/research-team verification
 
-The card MUST include TWO clinician actions:
+Do not expose unnecessary patient identifiers in the card.
+
+==================================================
+CLINICIAN ACTIONS
+==================================================
+
+The card should present three clinician actions conceptually:
 
 1. Interested
 2. Not Interested
+3. Refer Patient
+
+IMPORTANT MEANINGS:
+
+INTERESTED:
+The clinician wants to flag the trial for follow-up but is NOT initiating
+a referral yet.
+
+NOT INTERESTED:
+The clinician does not want to pursue the displayed trial for this
+patient at this time. This records a decision rather than simply
+silently dismissing the opportunity.
+
+REFER PATIENT:
+The clinician wants to initiate the actual HeLaSync referral workflow.
+
+The detailed referral workflow is provided by the HeLaSync Smart App link
+added by the API layer.
+
+If CDS Hooks suggestions are used, use at-most-one selection behavior.
+
+The Refer Patient action may use a FHIR Task create action representing a
+referral request. Interested and Not Interested must NOT be represented as
+an actual patient referral.
 
 ==================================================
-INTERESTED ACTION
+ADDITIONAL INFORMATION
 ==================================================
 
-The Interested action represents that the clinician wants to
-refer the patient for consideration of the clinical trial.
+The API layer will attach the HeLaSync Smart App URL to the CDS card.
 
-Use this CDS Hooks suggestion:
+Do not invent or replace that URL inside Agent 5.
 
-{
-  "label": "Interested",
-  "uuid": "helasync-referral",
-  "actions": [
-    {
-      "type": "create",
-      "description": "Create a HeLaSync clinical trial referral Task",
-      "resource": {
-        "resourceType": "Task",
-        "status": "requested",
-        "intent": "order",
-        "code": {
-          "text": "HeLaSync clinical trial referral"
-        },
-        "identifier": [
-          {
-            "system": "https://helasync.org/referral",
-            "value": "[TRIAL ID]"
-          }
-        ],
-        "description": "Clinician interested in referral to [TRIAL TITLE]",
-        "for": {
-          "reference": "Patient/[PATIENT ID]"
-        }
-      }
-    }
-  ]
-}
+The Smart App is the detailed clinician workflow where the clinician can
+review:
 
-==================================================
-NOT INTERESTED ACTION
-==================================================
-
-The Not Interested action represents that the clinician
-does not want to pursue the displayed clinical trial
-for this patient.
-
-Use this CDS Hooks suggestion:
-
-{
-  "label": "Not Interested",
-  "uuid": "helasync-not-interested",
-  "actions": [
-    {
-      "type": "create",
-      "description": "Record that the clinician is not interested in this clinical trial",
-      "resource": {
-        "resourceType": "Task",
-        "status": "rejected",
-        "intent": "order",
-        "code": {
-          "text": "HeLaSync clinical trial referral declined"
-        },
-        "identifier": [
-          {
-            "system": "https://helasync.org/referral",
-            "value": "[TRIAL ID]"
-          }
-        ],
-        "description": "Clinician not interested in referral to [TRIAL TITLE]",
-        "for": {
-          "reference": "Patient/[PATIENT ID]"
-        }
-      }
-    }
-  ]
-}
-
-==================================================
-SELECTION BEHAVIOR
-==================================================
-
-Because the clinician should choose either Interested OR
-Not Interested, use:
-
-"selectionBehavior": "at-most-one"
+- Trial overview
+- Why the patient matched
+- Eligibility review
+- Study details
+- What happens next
+- Referral workflow
 
 ==================================================
 NO MATCH
 ==================================================
 
-If:
+If Agent 4 returns:
 
 "verification_status": "NO_MATCH"
 
@@ -1160,33 +895,18 @@ return:
 INSUFFICIENT INFORMATION
 ==================================================
 
-If:
+If Agent 4 returns:
 
 "verification_status": "INSUFFICIENT_INFORMATION"
 
-return one informational card explaining that additional
-information is required to determine potential eligibility.
+return one informational CDS card explaining that additional patient
+information is required before a potential trial match can be determined.
 
-Do NOT display Interested or Not Interested actions for
-INSUFFICIENT_INFORMATION unless a potential trial match
-has actually been identified.
+Do not display Interested, Not Interested, or Refer Patient actions unless
+Agent 4 has identified a POTENTIAL_MATCH.
 
-==================================================
-IMPORTANT
-==================================================
-
-Do NOT perform your own eligibility analysis.
-
-Agent 4 is the source of truth.
-
-Do NOT invent clinical information.
-
-Do NOT invent trial information.
-
-Do NOT make a final enrollment decision.
-
-Do NOT expose unnecessary patient identifiers in the
-CDS card.
+If Agent 4 returns only BLOCKED trials because a core/gating criterion is
+UNKNOWN, do not present those trials as potential matches.
 
 ==================================================
 OUTPUT
@@ -1194,13 +914,13 @@ OUTPUT
 
 Return ONLY valid JSON.
 
-For a MATCH, use:
+For a POTENTIAL_MATCH, use this structure:
 
 {
   "cards": [
     {
-      "summary": "Potential clinical trial match",
-      "detail": "Trial: [TRIAL TITLE] ([TRIAL ID])\\n\\nThis patient appears to meet the documented eligibility criteria based on available information. This is a preliminary automated assessment and requires clinical/research staff verification.",
+      "summary": "Potential clinical trial match: [TRIAL TITLE]",
+      "detail": "Trial: [TRIAL TITLE] ([TRIAL ID])\\n\\n[WHY THE PATIENT MATCHES]\\n\\nThis is a preliminary automated assessment and requires clinician and research-team verification.",
       "indicator": "info",
       "source": {
         "label": "HeLaSync"
@@ -1209,25 +929,25 @@ For a MATCH, use:
       "suggestions": [
         {
           "label": "Interested",
-          "uuid": "helasync-referral",
+          "uuid": "helasync-interested",
           "actions": [
             {
               "type": "create",
-              "description": "Create a HeLaSync clinical trial referral Task",
+              "description": "Record clinician interest in this clinical trial without initiating a referral",
               "resource": {
                 "resourceType": "Task",
                 "status": "requested",
                 "intent": "order",
                 "code": {
-                  "text": "HeLaSync clinical trial referral"
+                  "text": "HeLaSync clinical trial interest"
                 },
                 "identifier": [
                   {
-                    "system": "https://helasync.org/referral",
+                    "system": "https://helasync.org/interest",
                     "value": "[TRIAL ID]"
                   }
                 ],
-                "description": "Clinician interested in referral to [TRIAL TITLE]",
+                "description": "Clinician interested in learning more about [TRIAL TITLE]",
                 "for": {
                   "reference": "Patient/[PATIENT ID]"
                 }
@@ -1241,13 +961,41 @@ For a MATCH, use:
           "actions": [
             {
               "type": "create",
-              "description": "Record that the clinician is not interested in this clinical trial",
+              "description": "Record that the clinician is not interested in pursuing this clinical trial",
               "resource": {
                 "resourceType": "Task",
                 "status": "rejected",
                 "intent": "order",
                 "code": {
-                  "text": "HeLaSync clinical trial referral declined"
+                  "text": "HeLaSync clinical trial opportunity declined"
+                },
+                "identifier": [
+                  {
+                    "system": "https://helasync.org/interest",
+                    "value": "[TRIAL ID]"
+                  }
+                ],
+                "description": "Clinician not interested in [TRIAL TITLE]",
+                "for": {
+                  "reference": "Patient/[PATIENT ID]"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "label": "Refer Patient",
+          "uuid": "helasync-refer-patient",
+          "actions": [
+            {
+              "type": "create",
+              "description": "Initiate a HeLaSync clinical trial referral",
+              "resource": {
+                "resourceType": "Task",
+                "status": "requested",
+                "intent": "order",
+                "code": {
+                  "text": "HeLaSync clinical trial referral"
                 },
                 "identifier": [
                   {
@@ -1255,7 +1003,7 @@ For a MATCH, use:
                     "value": "[TRIAL ID]"
                   }
                 ],
-                "description": "Clinician not interested in referral to [TRIAL TITLE]",
+                "description": "Clinician requested referral to [TRIAL TITLE]",
                 "for": {
                   "reference": "Patient/[PATIENT ID]"
                 }
@@ -1289,7 +1037,7 @@ For INSUFFICIENT_INFORMATION:
   ]
 }
 
-Return ONLY JSON.
+Return ONLY valid JSON. Do not include Markdown fences.
 """,
 
     output_key="cds_card"
