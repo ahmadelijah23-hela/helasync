@@ -2,14 +2,14 @@
   "protocolSection": {
     "identificationModule": {
       "nctId": "NCTFAKE003",
-      "briefTitle": "HeLaSync Heart Failure Treatment Study"
+      "briefTitle": "HeLaSync Type 2 Diabetes Treatment Study"
     },
     "statusModule": {
       "overallStatus": "RECRUITING"
     },
     "conditionsModule": {
       "conditions": [
-        "Heart Failure"
+        "Type 2 Diabetes Mellitus"
       ]
     },
     "designModule": {
@@ -19,10 +19,11 @@
       ]
     },
     "eligibilityModule": {
-      "eligibilityCriteria": "Inclusion Criteria:\n1. Age 18 or older.\n2. Diagnosis of Heart Failure.\n3. NT-proBNP above 300 pg/mL.\n\nExclusion Criteria:\n1. Pregnancy.\n2. eGFR below 30 mL/min/1.73 m2.",
+      "eligibilityCriteria": "Inclusion Criteria:\n1. Age 18 to 75 years.\n2. Diagnosis of Type 2 Diabetes Mellitus for at least 6 months.\n3. HbA1c between 7.0% and 10.0% at screening.\n4. Currently treated with lifestyle modification alone or a stable dose of metformin for at least 3 months.\n5. Body mass index (BMI) between 25 and 45 kg/m2.\n6. Fasting plasma glucose between 126 and 250 mg/dL at screening.\n7. eGFR ≥45 mL/min/1.73 m2.\n8. Able to understand and provide written informed consent.\n9. Willing and able to comply with study visits, laboratory testing, and study procedures.\n10. If taking antihypertensive or lipid-lowering medications, doses must be stable for at least 4 weeks before screening.\n\nExclusion Criteria:\n1. Type 1 diabetes mellitus, latent autoimmune diabetes in adults (LADA), or other forms of diabetes.\n2. History of diabetic ketoacidosis or hyperosmolar hyperglycemic state within the past 12 months.\n3. HbA1c below 7.0% or above 10.0% at screening.\n4. Use of insulin within the previous 3 months.\n5. Use of GLP-1 receptor agonists, dual GIP/GLP-1 receptor agonists, or other investigational glucose-lowering therapies within the previous 3 months.\n6. Use of systemic corticosteroids within the previous 3 months, except for short-term treatment of ≤7 consecutive days.\n7. History of severe hypoglycemia requiring assistance from another person within the previous 6 months.\n8. History of proliferative diabetic retinopathy or diabetic macular edema requiring active treatment.\n9. History of diabetic foot ulcer, lower-extremity amputation, or active diabetic foot infection.\n10. Significant cardiovascular disease, including myocardial infarction, stroke, or hospitalization for unstable angina within the previous 6 months.\n11. Uncontrolled hypertension, defined as systolic blood pressure ≥180 mmHg or diastolic blood pressure ≥110 mmHg at screening.\n12. eGFR below 45 mL/min/1.73 m2.\n13. Significant hepatic impairment or alanine aminotransferase (ALT) or aspartate aminotransferase (AST) greater than 3 times the upper limit of normal.\n14. History of pancreatitis within the previous 2 years.\n15. History of pancreatic, thyroid, or other endocrine malignancy within the previous 5 years, except adequately treated non-melanoma skin cancer.\n16. Pregnancy, breastfeeding, or plans to become pregnant during the study period.\n17. Active infection or other acute illness that, in the investigator's opinion, could interfere with study participation or interpretation of results.\n18. Known allergy or hypersensitivity to the study drug or any of its components.\n19. Participation in another interventional clinical trial within 30 days before screening.\n20. Any medical, psychiatric, or social condition that, in the investigator's judgment, could interfere with the participant's ability to comply with study requirements.",
       "healthyVolunteers": false,
       "sex": "ALL",
-      "minimumAge": "18 Years"
+      "minimumAge": "18 Years",
+      "maximumAge": "75 Years"
     }
   }
 }
