@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+
 from google.adk.agents import Agent, SequentialAgent
 
 
@@ -23,15 +24,12 @@ def load_trials():
 
     for trial_file in sorted(trial_folder.iterdir()):
 
-        # Ignore hidden files
         if trial_file.name.startswith("."):
             continue
 
-        # Ignore folders
         if not trial_file.is_file():
             continue
 
-        # Only process JSON files
         if trial_file.suffix.lower() != ".json":
             continue
 
@@ -64,7 +62,6 @@ def load_trials():
 # Load trials when application starts
 trial_list = load_trials()
 
-# Convert trials to readable JSON for agents
 trial_list_json = json.dumps(
     trial_list,
     indent=2
@@ -488,17 +485,7 @@ IMPORTANT
 
 Do not treat missing information as automatically negative.
 
-For example:
-
-If the trial requires HbA1c 6.5–8.0% and HbA1c is missing:
-
-Result = unknown
-
-NOT:
-
-Result = not_met
-
-However, if a required criterion is unknown, the overall result
+If a required criterion is unknown, the overall result
 cannot be ELIGIBLE.
 
 Do not make a clinical enrollment decision.
@@ -567,8 +554,8 @@ cds_card_agent = Agent(
     name="CDS_Card_Agent",
 
     description=(
-        "Creates a concise, clinician-friendly CDS Hooks card "
-        "from the verified eligibility result."
+        "Creates a concise clinician-facing CDS Hooks card "
+        "for potential clinical trial opportunities."
     ),
 
     instruction="""
@@ -579,26 +566,103 @@ Agent 4 produced:
 {eligibility_results}
 
 Your ONLY job is to convert the Agent 4 result into a
-concise CDS Hooks response for a busy clinician.
+concise clinician-facing CDS Hooks response.
 
 ==================================================
-CORE PRINCIPLE
+CARD PURPOSE
 ==================================================
 
-The CDS card is a QUICK CLINICIAN NOTIFICATION.
+The CDS card is ONLY an opportunity notification.
 
-Do NOT put full clinical trial details in the CDS card.
-
-The CDS card should answer only:
-
-1. What trial is this?
-2. Why did HeLaSync surface it?
-3. Is it a potential match?
-4. Is anything important still unknown?
-5. What should the clinician do next?
-
-Detailed trial information belongs in the HeLaSync
+The detailed trial information belongs in the HeLaSync
 Smart App.
+
+Do NOT display:
+
+- detailed eligibility criteria
+- patient laboratory values
+- match percentages
+- missing information
+- long trial descriptions
+- detailed clinical reasoning
+- referral instructions
+- enrollment instructions
+
+==================================================
+CARD LAYOUT
+==================================================
+
+For a MATCH, the card must communicate:
+
+Potential Clinical Trial Opportunity
+
+Source: HeLaSync
+
+[TRIAL SPONSOR]: [TRIAL NAME]
+PI: [PRINCIPAL INVESTIGATOR]
+
+The trial sponsor/name and PI must come from the available
+trial information.
+
+Do NOT invent a PI.
+
+If a PI is unavailable in the trial data, use:
+
+PI: Not listed
+
+==================================================
+VIEW TRIAL DETAILS
+==================================================
+
+The HeLaSync API will attach the actual Smart App URL.
+
+The Smart App route is:
+
+/referral-launch
+
+The API will dynamically attach:
+
+trial_id
+patient_id
+clinician_id
+encounter_id
+hook_instance
+
+DO NOT invent a URL.
+
+DO NOT create a hard-coded URL.
+
+The API layer is responsible for the
+"View Trial Details" link.
+
+==================================================
+DISMISS
+==================================================
+
+The CDS opportunity should have a Dismiss action.
+
+Dismiss must NOT:
+
+- create a referral
+- enroll the patient
+- modify the patient's record
+- create a Task
+- send information externally
+
+==================================================
+IMPORTANT
+==================================================
+
+Do NOT create:
+
+- Interested
+- Not Interested
+- Refer Patient
+- Enroll
+- Contact Site
+
+The detailed referral workflow is handled inside
+the HeLaSync Smart App.
 
 ==================================================
 MATCH
@@ -612,90 +676,35 @@ return ONE CDS Hooks card.
 
 The card MUST contain:
 
-- A short summary
-- Trial title
-- Trial ID in parentheses after the trial title
-- One short "Why" statement
-- A short "Needs verification" statement ONLY if
-  information is unknown
-- A brief preliminary assessment statement
+summary:
+"Potential Clinical Trial Opportunity"
 
-==================================================
-CARD LENGTH
-==================================================
+detail:
 
-Keep the card SHORT.
+"Source: HeLaSync
 
-Maximum:
+[TRIAL SPONSOR]: [TRIAL NAME]
+PI: [PRINCIPAL INVESTIGATOR]"
 
-- 1 short summary
-- 1 trial title line
-- 1 short Why statement
-- 1 short Needs verification line if needed
-- 1 brief disclaimer
+indicator:
+"info"
 
-Do NOT list every eligibility criterion.
-
-Do NOT list every MET criterion.
-
-Do NOT display detailed laboratory values unless
-they are essential to explain the match.
-
-Do NOT display the full eligibility criteria.
-
-Do NOT display long clinical explanations.
-
-Do NOT display patient identifiers.
-
-Do NOT calculate or display match percentages.
-
-==================================================
-CARD STYLE
-==================================================
-
-Use this style:
-
-Summary:
-
-"Potential clinical trial match"
-
-Detail:
-
-"[TRIAL TITLE] ([TRIAL ID])
-
-Why: [ONE SHORT SENTENCE explaining why the trial
-was surfaced.]
-
-Needs verification: [SHORT LIST OF UNKNOWN ITEMS]
-
-Preliminary automated assessment — clinician/research
-team verification required."
-
-If there are NO unknown items, omit the
-"Needs verification" line.
-
-==================================================
-EXAMPLE
-==================================================
-
+source:
 {
-  "cards": [
-    {
-      "summary": "Potential clinical trial match",
-      "detail": "HeLaSync Type 2 Diabetes Treatment Study (NCTFAKE003)\\n\\n"
-                "Why: Documented Type 2 diabetes and key "
-                "eligibility criteria are met.\\n\\n"
-                "Needs verification: Liver function, drug allergy "
-                "history, and consent capacity.\\n\\n"
-                "Preliminary automated assessment — clinician/"
-                "research team verification required.",
-      "indicator": "info",
-      "source": {
-        "label": "HeLaSync"
-      }
-    }
-  ]
+  "label": "HeLaSync"
 }
+
+Also include the verified trial ID as metadata for the
+HeLaSync API so the API can construct the Smart App URL.
+
+Use:
+
+"extension": {
+  "helasync_trial_id": "[TRIAL ID]"
+}
+
+The extension is internal HeLaSync metadata and should not
+be displayed as patient-facing text.
 
 ==================================================
 NO MATCH
@@ -719,27 +728,17 @@ If:
 
 "verification_status": "INSUFFICIENT_INFORMATION"
 
-return ONE short informational card:
+return:
 
 {
-  "cards": [
-    {
-      "summary": "More information needed",
-      "detail": "HeLaSync identified a possible clinical trial "
-                "but additional patient information is needed "
-                "to determine potential eligibility.",
-      "indicator": "info",
-      "source": {
-        "label": "HeLaSync"
-      }
-    }
-  ]
+  "cards": []
 }
 
-Do NOT list all missing criteria.
+Do not display a trial opportunity when required gating
+information is insufficient.
 
 ==================================================
-IMPORTANT
+SOURCE OF TRUTH
 ==================================================
 
 Agent 4 is the source of truth.
@@ -752,24 +751,41 @@ Do NOT invent trial information.
 
 Do NOT make a final enrollment decision.
 
-Do NOT expose unnecessary patient identifiers.
-
-Do NOT overwhelm the clinician with information.
-
-The CDS card is a summary.
-
-The HeLaSync Smart App contains the detailed
-trial information.
-
-Do NOT create Interested or Not Interested
-suggestion buttons.
-
-The clinician should use the Smart App link
-for the next step.
-
 ==================================================
 OUTPUT
 ==================================================
+
+Return ONLY valid JSON.
+
+For a MATCH:
+
+{
+  "cards": [
+    {
+      "summary": "Potential Clinical Trial Opportunity",
+      "detail": "Source: HeLaSync\\n\\n[TRIAL SPONSOR]: [TRIAL NAME]\\nPI: [PRINCIPAL INVESTIGATOR]",
+      "indicator": "info",
+      "source": {
+        "label": "HeLaSync"
+      },
+      "extension": {
+        "helasync_trial_id": "[TRIAL ID]"
+      }
+    }
+  ]
+}
+
+For NO_MATCH:
+
+{
+  "cards": []
+}
+
+For INSUFFICIENT_INFORMATION:
+
+{
+  "cards": []
+}
 
 Return ONLY valid JSON.
 """,
@@ -795,20 +811,15 @@ root_agent = SequentialAgent(
 
     sub_agents=[
 
-        # Agent 1
         patient_data_agent,
 
-        # Agent 2
         clinical_profile_agent,
 
-        # Agent 3
         trial_matching_agent,
 
-        # Agent 4
         eligibility_verification_agent,
 
-        # Agent 5
-        cds_card_agent
+        cds_card_agent,
 
     ]
 )
