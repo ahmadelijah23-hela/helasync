@@ -1884,7 +1884,7 @@ def render_smart_app(
             </button>
 
             <div class="modal-title">
-                Patient Not Interested
+                Not interested
             </div>
 
             <div class="modal-description">
@@ -1933,13 +1933,22 @@ def render_smart_app(
                 >
 
                 <label class="form-label">
-                    Optional clinician comment
+                    Reason
+                </label>
+
+                <label class="radio-option"><input type="radio" name="reason" value="Not appropriate at this time" required><span>Not appropriate at this time</span></label>
+                <label class="radio-option"><input type="radio" name="reason" value="Patient declined"><span>Patient declined</span></label>
+                <label class="radio-option"><input type="radio" name="reason" value="Clinically not eligible"><span>Clinically not eligible</span></label>
+                <label class="radio-option"><input type="radio" name="reason" value="Other"><span>Other</span></label>
+
+                <label class="form-label">
+                    Optional comment
                 </label>
 
                 <textarea
                     name="comment"
                     class="comment-box"
-                    placeholder="Reason or additional context..."
+                    placeholder="Add additional context..."
                 ></textarea>
 
                 <div class="modal-actions">
@@ -1954,7 +1963,7 @@ def render_smart_app(
                     <button
                         type="submit"
                         class="btn btn-danger">
-                        Record Not Interested
+                        Confirm
                     </button>
 
                 </div>
@@ -1991,19 +2000,14 @@ def render_smart_app(
 
             <div class="modal-description">
 
-                This will create a HeLaSync research
-                referral for the displayed clinical trial.
+                Refer this patient to the research team.
 
             </div>
 
             <div class="confirm-box">
 
                 <strong>
-                    {esc(
-                        trial_info[
-                            "trial_name"
-                        ]
-                    )}
+                    Research team
                 </strong>
 
                 <br>
@@ -2016,6 +2020,7 @@ def render_smart_app(
             </div>
 
             <form
+                id="referForm"
                 method="post"
                 action="/referrals/from-cds">
 
@@ -2055,6 +2060,19 @@ def render_smart_app(
                     value="CDS_HOOKS"
                 >
 
+                <label class="form-label">
+                    Next step
+                </label>
+
+                <label class="radio-option"><input type="radio" name="next_step" value="Coordinator contacts patient" form="referForm" required><span>Coordinator contacts patient</span></label>
+                <label class="radio-option"><input type="radio" name="next_step" value="I discussed it with patient today" form="referForm"><span>I discussed it with patient today</span></label>
+
+                <label class="form-label">
+                    Optional note to research team
+                </label>
+
+                <textarea name="note" class="comment-box" placeholder="Add a note for the research team..."></textarea>
+
                 <div class="modal-actions">
 
                     <button
@@ -2067,7 +2085,7 @@ def render_smart_app(
                     <button
                         type="submit"
                         class="btn btn-primary">
-                        Confirm Referral
+                        Send referral
                     </button>
 
                 </div>
@@ -3223,6 +3241,28 @@ body {{
     margin-top: 18px;
 }}
 
+
+.radio-option {
+
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin-top: 10px;
+    padding: 10px 12px;
+    border: 1px solid #dbe3ec;
+    border-radius: 8px;
+    color: #334155;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.radio-option:hover {
+    background: #f8fafc;
+}
+
+.radio-option input {
+    margin: 0;
+}
 
 /* =========================================================
    RESPONSIVE
