@@ -33,6 +33,7 @@ APP_VERSION = "1.6.4"
 APP_NAME = "helasync"
 BASE_URL = "https://helasync.onrender.com"
 
+
 app = FastAPI(
     title="HeLaSync API",
     description=(
@@ -77,7 +78,7 @@ runner = Runner(
 
 
 # ============================================================
-# APPLICATION ROUTERS
+# ROUTERS
 # ============================================================
 
 app.include_router(research_router)
@@ -89,10 +90,7 @@ app.include_router(referral_launch_router)
 # ============================================================
 
 def as_dict(value: Any) -> Dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-
-    return {}
+    return value if isinstance(value, dict) else {}
 
 
 def as_text(
@@ -104,9 +102,7 @@ def as_text(
         return default
 
     if isinstance(value, str):
-        value = value.strip()
-
-        return value if value else default
+        return value.strip() or default
 
     if isinstance(value, (int, float)):
         return str(value)
@@ -123,7 +119,7 @@ def as_text(
             if value.get(key) is not None:
 
                 result = as_text(
-                    value.get(key)
+                    value[key]
                 )
 
                 if result:
@@ -131,23 +127,22 @@ def as_text(
 
     if isinstance(value, list):
 
-        values = []
+        values = [
+            as_text(item)
+            for item in value
+        ]
 
-        for item in value:
-
-            item_text = as_text(item)
-
-            if item_text:
-                values.append(item_text)
-
-        if values:
-            return ", ".join(values)
+        return ", ".join(
+            item
+            for item in values
+            if item
+        ) or default
 
     return default
 
 
 # ============================================================
-# FHIR HELPERS
+# FHIR RESOURCE HELPERS
 # ============================================================
 
 def find_patient_resource(
@@ -155,11 +150,8 @@ def find_patient_resource(
 ) -> Optional[Dict[str, Any]]:
 
     """
-    Locate a FHIR Patient resource.
-
-    Supports:
-    - Patient resource
-    - Bundle containing Patient
+    Find a Patient resource inside either a standalone
+    FHIR Patient resource or a FHIR Bundle.
     """
 
     if not isinstance(resource, dict):
@@ -172,20 +164,20 @@ def find_patient_resource(
 
         for entry in resource.get(
             "entry",
-            [],
+            []
         ) or []:
 
-            entry = as_dict(entry)
-
-            candidate = as_dict(
-                entry.get("resource")
+            item = as_dict(
+                as_dict(entry).get(
+                    "resource"
+                )
             )
 
-            if candidate.get(
+            if item.get(
                 "resourceType"
             ) == "Patient":
 
-                return candidate
+                return item
 
     return None
 
@@ -195,40 +187,47 @@ def flatten_prefetch(
 ) -> List[Dict[str, Any]]:
 
     """
-    Convert CDS Hooks prefetch resources into
-    a flat list of FHIR resources.
+    Convert CDS Hooks prefetch resources into a flat list
+    of FHIR resources.
+
+    Handles both individual FHIR resources and Bundles.
     """
 
     resources = []
 
-    for resource in prefetch.values():
+    for value in prefetch.values():
 
-        if not isinstance(resource, dict):
+        if not isinstance(value, dict):
             continue
 
-        # Prefetch item is a Bundle
-        if resource.get(
+        if value.get(
             "resourceType"
         ) == "Bundle":
 
-            for entry in resource.get(
+            for entry in value.get(
                 "entry",
-                [],
+                []
             ) or []:
 
-                entry = as_dict(entry)
-
-                item = as_dict(
-                    entry.get("resource")
+                resource = as_dict(
+                    as_dict(entry).get(
+                        "resource"
+                    )
                 )
 
-                if item.get("resourceType"):
-                    resources.append(item)
+                if resource.get(
+                    "resourceType"
+                ):
 
-        # Prefetch item is a single FHIR resource
-        elif resource.get("resourceType"):
+                    resources.append(
+                        resource
+                    )
 
-            resources.append(resource)
+        elif value.get(
+            "resourceType"
+        ):
+
+            resources.append(value)
 
     return resources
 
@@ -242,28 +241,26 @@ def normalize_patient(
 ) -> Dict[str, Any]:
 
     """
-    Locate the Patient resource and guarantee that
-    it contains the CDS Hooks context.patientId.
-
-    The normalized Patient is also guaranteed to exist
-    inside the FHIR Bundle.
+    Find the Patient resource, ensure it has an ID,
+    and ensure the normalized Patient remains inside
+    the FHIR Bundle.
     """
 
     patient = None
 
     # --------------------------------------------------------
-    # Search the constructed Bundle
+    # First search the generated FHIR Bundle
     # --------------------------------------------------------
 
     for entry in fhir_bundle.get(
         "entry",
-        [],
+        []
     ) or []:
 
-        entry = as_dict(entry)
-
         resource = as_dict(
-            entry.get("resource")
+            as_dict(entry).get(
+                "resource"
+            )
         )
 
         if resource.get(
@@ -271,11 +268,10 @@ def normalize_patient(
         ) == "Patient":
 
             patient = resource
-
             break
 
     # --------------------------------------------------------
-    # Search original CDS Hooks patient prefetch
+    # If necessary, search the original CDS prefetch
     # --------------------------------------------------------
 
     if patient is None and prefetch:
@@ -285,25 +281,17 @@ def normalize_patient(
         )
 
     # --------------------------------------------------------
-    # If no Patient was returned, create a minimal
-    # Patient resource using the CDS patient ID.
+    # If no Patient exists, create a minimal resource
     # --------------------------------------------------------
 
     if patient is None:
 
         patient = {
-            "resourceType": "Patient",
-            "id": patient_id,
+            "resourceType": "Patient"
         }
 
-        print(
-            "WARNING: CDS Hooks did not provide a Patient "
-            "resource. Created minimal Patient using "
-            f"context.patientId: {patient_id}"
-        )
-
     # --------------------------------------------------------
-    # Guarantee Patient ID
+    # Ensure Patient has an ID
     # --------------------------------------------------------
 
     if not patient.get("id"):
@@ -323,20 +311,20 @@ def normalize_patient(
         )
 
     # --------------------------------------------------------
-    # Guarantee Patient exists inside Bundle
+    # Ensure normalized Patient exists in Bundle
     # --------------------------------------------------------
 
-    patient_found_in_bundle = False
+    patient_entry_found = False
 
     for entry in fhir_bundle.get(
         "entry",
-        [],
+        []
     ) or []:
 
-        entry = as_dict(entry)
-
         resource = as_dict(
-            entry.get("resource")
+            as_dict(entry).get(
+                "resource"
+            )
         )
 
         if resource.get(
@@ -345,28 +333,24 @@ def normalize_patient(
 
             entry["resource"] = patient
 
-            patient_found_in_bundle = True
+            patient_entry_found = True
 
             break
 
-    if not patient_found_in_bundle:
+    if not patient_entry_found:
 
         fhir_bundle.setdefault(
             "entry",
-            [],
+            []
         ).insert(
             0,
             {
-                "resource": patient,
+                "resource": patient
             },
         )
 
     return patient
 
-
-# ============================================================
-# PRIVACY INPUT BUILDER
-# ============================================================
 
 def build_privacy_input(
     patient_id: str,
@@ -375,28 +359,37 @@ def build_privacy_input(
 ) -> Dict[str, Any]:
 
     """
-    Build the complete Privacy Gateway input.
+    Build the structured input used by the Privacy Gateway.
 
-    The Patient resource is supplied explicitly rather than
-    requiring the Privacy Gateway to discover it only from
-    the Bundle.
+    The gateway receives:
+      - Patient
+      - Conditions
+      - Observations
+      - Medications
+      - Patient ID
+      - Complete FHIR Bundle
     """
 
     resources = []
 
     for entry in fhir_bundle.get(
         "entry",
-        [],
+        []
     ) or []:
 
-        entry = as_dict(entry)
-
         resource = as_dict(
-            entry.get("resource")
+            as_dict(entry).get(
+                "resource"
+            )
         )
 
-        if resource.get("resourceType"):
-            resources.append(resource)
+        if resource.get(
+            "resourceType"
+        ):
+
+            resources.append(
+                resource
+            )
 
     conditions = [
         resource
@@ -436,7 +429,7 @@ def build_privacy_input(
 
 
 # ============================================================
-# TRIAL HELPERS
+# TRIAL METADATA HELPERS
 # ============================================================
 
 def get_trial_metadata(
@@ -445,11 +438,16 @@ def get_trial_metadata(
 
     for trial in trial_list:
 
-        if not isinstance(trial, dict):
+        if not isinstance(
+            trial,
+            dict
+        ):
             continue
 
         protocol = as_dict(
-            trial.get("protocolSection")
+            trial.get(
+                "protocolSection"
+            )
         )
 
         identification = as_dict(
@@ -471,6 +469,7 @@ def get_trial_metadata(
         }
 
         if trial_id in identifiers:
+
             return trial
 
     return {}
@@ -499,11 +498,16 @@ def extract_trial_id(
 
     for trial in trial_list:
 
-        if not isinstance(trial, dict):
+        if not isinstance(
+            trial,
+            dict
+        ):
             continue
 
         protocol = as_dict(
-            trial.get("protocolSection")
+            trial.get(
+                "protocolSection"
+            )
         )
 
         identification = as_dict(
@@ -526,7 +530,11 @@ def extract_trial_id(
 
         for identifier in identifiers:
 
-            if identifier and identifier in detail:
+            if (
+                identifier
+                and identifier in detail
+            ):
+
                 return identifier
 
     return ""
@@ -538,7 +546,9 @@ def get_trial_title(
 ) -> str:
 
     protocol = as_dict(
-        trial.get("protocolSection")
+        trial.get(
+            "protocolSection"
+        )
     )
 
     identification = as_dict(
@@ -555,10 +565,14 @@ def get_trial_title(
             trial.get("briefTitle")
         )
         or as_text(
-            identification.get("briefTitle")
+            identification.get(
+                "briefTitle"
+            )
         )
         or as_text(
-            identification.get("officialTitle")
+            identification.get(
+                "officialTitle"
+            )
         )
         or trial_id
         or "Clinical Trial"
@@ -570,7 +584,9 @@ def get_trial_sponsor(
 ) -> str:
 
     protocol = as_dict(
-        trial.get("protocolSection")
+        trial.get(
+            "protocolSection"
+        )
     )
 
     identification = as_dict(
@@ -601,7 +617,9 @@ def get_trial_sponsor(
             )
         )
         or as_text(
-            lead_sponsor.get("name")
+            lead_sponsor.get(
+                "name"
+            )
         )
         or "Clinical Trial"
     )
@@ -626,7 +644,9 @@ def get_principal_investigator(
         return pi
 
     protocol = as_dict(
-        trial.get("protocolSection")
+        trial.get(
+            "protocolSection"
+        )
     )
 
     contacts_module = as_dict(
@@ -637,24 +657,30 @@ def get_principal_investigator(
 
     for location in contacts_module.get(
         "locations",
-        [],
+        []
     ) or []:
 
-        location = as_dict(location)
-
-        for contact in location.get(
+        for contact in as_dict(
+            location
+        ).get(
             "contacts",
-            [],
+            []
         ) or []:
 
-            contact = as_dict(contact)
+            contact = as_dict(
+                contact
+            )
 
             role = as_text(
-                contact.get("role")
+                contact.get(
+                    "role"
+                )
             ).lower()
 
             name = as_text(
-                contact.get("name")
+                contact.get(
+                    "name"
+                )
             )
 
             if name and (
@@ -663,13 +689,14 @@ def get_principal_investigator(
                 or role
                 == "overall study official"
             ):
+
                 return name
 
     return "Not listed"
 
 
 # ============================================================
-# CDS CARD FORMATTER
+# CDS CARD FORMATTING
 # ============================================================
 
 def format_trial_card(
@@ -680,8 +707,16 @@ def format_trial_card(
 ) -> Dict[str, Any]:
 
     """
-    Convert the agent card into the locked HeLaSync
-    CDS Hooks card design.
+    Apply the required HeLaSync CDS card design:
+
+    Potential Clinical Trial Opportunity
+
+    Sponsor: Trial Name
+
+    PI: Principal Investigator
+
+    View Trial Details
+    Dismiss
     """
 
     formatted = dict(card)
@@ -712,7 +747,7 @@ def format_trial_card(
 
     title = get_trial_title(
         trial,
-        trial_id,
+        trial_id
     )
 
     pi = get_principal_investigator(
@@ -720,7 +755,7 @@ def format_trial_card(
     )
 
     # --------------------------------------------------------
-    # Locked summary
+    # Required card summary
     # --------------------------------------------------------
 
     formatted["summary"] = (
@@ -728,15 +763,15 @@ def format_trial_card(
     )
 
     # --------------------------------------------------------
-    # Source
+    # Required source
     # --------------------------------------------------------
 
     formatted["source"] = {
-        "label": "HeLaSync",
+        "label": "HeLaSync"
     }
 
     # --------------------------------------------------------
-    # Locked detail format
+    # Required card detail
     # --------------------------------------------------------
 
     formatted["detail"] = (
@@ -745,33 +780,36 @@ def format_trial_card(
     )
 
     # --------------------------------------------------------
-    # Internal metadata must never be shown to clinician
+    # Remove internal metadata
     # --------------------------------------------------------
 
     formatted.pop(
         "extension",
-        None,
+        None
     )
 
     # --------------------------------------------------------
-    # Smart App
+    # View Trial Details
     # --------------------------------------------------------
 
     if trial_id:
 
-        query = urlencode({
-            "trial_id": trial_id,
-            "patient_id": patient_id,
-            "clinician_id": user_id,
-            "encounter_id": hook_instance,
-            "hook_instance": hook_instance,
-        })
+        query = urlencode(
+            {
+                "trial_id": trial_id,
+                "patient_id": patient_id,
+                "clinician_id": user_id,
+                "encounter_id": hook_instance,
+                "hook_instance": hook_instance,
+            }
+        )
 
         formatted["links"] = [
             {
                 "label": "View Trial Details",
                 "url": (
-                    f"{BASE_URL}/referral-launch?"
+                    f"{BASE_URL}"
+                    f"/referral-launch?"
                     f"{query}"
                 ),
                 "type": "absolute",
@@ -798,10 +836,6 @@ def format_trial_card(
     return formatted
 
 
-# ============================================================
-# SERVICE ERROR
-# ============================================================
-
 def service_error_card(
     message: str,
 ) -> Dict[str, Any]:
@@ -809,13 +843,11 @@ def service_error_card(
     return {
         "cards": [
             {
-                "summary": (
-                    "HeLaSync Service Error"
-                ),
+                "summary": "HeLaSync Service Error",
                 "indicator": "warning",
                 "detail": message,
                 "source": {
-                    "label": "HeLaSync",
+                    "label": "HeLaSync"
                 },
             }
         ]
@@ -839,10 +871,6 @@ async def root():
     }
 
 
-# ============================================================
-# AGENT STATUS
-# ============================================================
-
 @app.get("/agent-status")
 async def agent_status():
 
@@ -863,9 +891,7 @@ async def agent_status():
 # PRIVACY GATEWAY TEST ENDPOINT
 # ============================================================
 
-@app.post(
-    "/privacy/process-patient"
-)
+@app.post("/privacy/process-patient")
 async def process_patient(
     patient_data: Dict[str, Any],
 ):
@@ -903,17 +929,30 @@ async def process_patient(
             patient_id,
         )
 
-        gateway_input = (
-            build_privacy_input(
-                patient_id,
-                patient,
-                fhir_bundle,
-            )
+        gateway_input = build_privacy_input(
+            patient_id,
+            patient,
+            fhir_bundle,
         )
 
+        # IMPORTANT:
+        # Pass the actual Patient resource to the gateway,
+        # NOT the entire gateway_input wrapper.
         sanitized_data = (
             privacy_gateway.process_patient(
-                gateway_input
+                patient=gateway_input[
+                    "patient"
+                ],
+                conditions=gateway_input.get(
+                    "conditions"
+                ),
+                medications=gateway_input.get(
+                    "medications"
+                ),
+                observations=gateway_input.get(
+                    "observations"
+                ),
+                patient_id=patient_id,
             )
         )
 
@@ -926,11 +965,8 @@ async def process_patient(
     except Exception as exc:
 
         print(
-            "PRIVACY ENDPOINT ERROR:"
-        )
-
-        print(
-            traceback.format_exc()
+            "PRIVACY ENDPOINT ERROR:\n",
+            traceback.format_exc(),
         )
 
         return {
@@ -951,28 +987,34 @@ async def cds_services():
         "services": [
             {
                 "hook": "patient-view",
+
                 "title": (
                     "HeLaSync Clinical Trial Matching"
                 ),
+
                 "description": (
                     "Identifies potentially relevant "
                     "clinical trials from the patient's "
                     "available clinical information."
                 ),
+
                 "id": "helasync",
+
                 "prefetch": {
                     "patient": (
-                        "Patient/"
-                        "{{context.patientId}}"
+                        "Patient/{{context.patientId}}"
                     ),
+
                     "conditions": (
                         "Condition?"
                         "patient={{context.patientId}}"
                     ),
+
                     "observations": (
                         "Observation?"
                         "patient={{context.patientId}}"
                     ),
+
                     "medications": (
                         "MedicationRequest?"
                         "patient={{context.patientId}}"
@@ -984,12 +1026,10 @@ async def cds_services():
 
 
 # ============================================================
-# MAIN HELASYNC CDS HOOK
+# MAIN CDS HOOK
 # ============================================================
 
-@app.post(
-    "/cds-services/helasync"
-)
+@app.post("/cds-services/helasync")
 async def helasync_cds(
     request: Dict[str, Any],
 ):
@@ -997,23 +1037,31 @@ async def helasync_cds(
     try:
 
         # ====================================================
-        # 1. EXTRACT CDS HOOK REQUEST
+        # 1. EXTRACT CDS HOOK REQUEST INFORMATION
         # ====================================================
 
         hook_instance = as_text(
             request.get(
                 "hookInstance"
             ),
-            str(uuid.uuid4()),
+            str(
+                uuid.uuid4()
+            ),
         )
 
         context = as_dict(
-            request.get("context")
+            request.get(
+                "context"
+            )
         )
 
         user_id = as_text(
-            context.get("userId")
-            or request.get("userId"),
+            context.get(
+                "userId"
+            )
+            or request.get(
+                "userId"
+            ),
             "helasync-clinician",
         )
 
@@ -1030,35 +1078,47 @@ async def helasync_cds(
             )
         )
 
-        print()
-        print("=" * 80)
-        print("HELASYNC CDS REQUEST")
-        print("=" * 80)
+        print(
+            "\n"
+            + "=" * 80
+        )
+
+        print(
+            "HELASYNC CDS REQUEST"
+        )
+
+        print(
+            "=" * 80
+        )
 
         print(
             "Patient ID:",
-            patient_id,
+            patient_id
         )
 
         print(
             "User ID:",
-            user_id,
+            user_id
         )
 
         print(
             "Hook:",
-            hook_instance,
+            hook_instance
         )
 
         print(
             "Prefetch resources:",
-            list(prefetch.keys()),
+            list(
+                prefetch.keys()
+            )
         )
 
-        print("=" * 80)
+        print(
+            "=" * 80
+        )
 
         # ====================================================
-        # 2. FLATTEN PREFETCH INTO FHIR BUNDLE
+        # 2. CONVERT PREFETCH INTO FHIR BUNDLE
         # ====================================================
 
         resources = flatten_prefetch(
@@ -1076,17 +1136,6 @@ async def helasync_cds(
             ],
         }
 
-        print(
-            "FHIR Bundle contains",
-            len(
-                fhir_bundle.get(
-                    "entry",
-                    []
-                )
-            ),
-            "resources.",
-        )
-
         # ====================================================
         # 3. NORMALIZE PATIENT
         # ====================================================
@@ -1095,6 +1144,17 @@ async def helasync_cds(
             fhir_bundle,
             patient_id,
             prefetch=prefetch,
+        )
+
+        print(
+            "FHIR Bundle contains",
+            len(
+                fhir_bundle.get(
+                    "entry",
+                    []
+                )
+            ),
+            "resources."
         )
 
         print(
@@ -1107,7 +1167,9 @@ async def helasync_cds(
                     "resourceType": patient.get(
                         "resourceType"
                     ),
-                    "id": patient.get("id"),
+                    "id": patient.get(
+                        "id"
+                    ),
                 },
                 indent=2,
             )
@@ -1117,12 +1179,10 @@ async def helasync_cds(
         # 4. BUILD PRIVACY GATEWAY INPUT
         # ====================================================
 
-        gateway_input = (
-            build_privacy_input(
-                patient_id,
-                patient,
-                fhir_bundle,
-            )
+        gateway_input = build_privacy_input(
+            patient_id,
+            patient,
+            fhir_bundle,
         )
 
         print(
@@ -1131,12 +1191,7 @@ async def helasync_cds(
 
         print(
             "Explicit Patient ID passed to gateway:",
-            gateway_input.get(
-                "patient",
-                {},
-            ).get(
-                "id"
-            ),
+            patient_id,
         )
 
         # ====================================================
@@ -1145,32 +1200,78 @@ async def helasync_cds(
 
         try:
 
+            # IMPORTANT FIX:
+            #
+            # Do NOT pass gateway_input as the `patient`
+            # argument.
+            #
+            # The gateway expects:
+            #
+            # patient={
+            #     "resourceType": "Patient",
+            #     "id": "helasync-test-001"
+            # }
+            #
+            # and not:
+            #
+            # patient={
+            #     "patient": {...},
+            #     "conditions": [...],
+            #     ...
+            # }
+
             sanitized_patient_data = (
                 privacy_gateway.process_patient(
-                    gateway_input
+                    patient=gateway_input[
+                        "patient"
+                    ],
+
+                    conditions=gateway_input.get(
+                        "conditions"
+                    ),
+
+                    medications=gateway_input.get(
+                        "medications"
+                    ),
+
+                    observations=gateway_input.get(
+                        "observations"
+                    ),
+
+                    patient_id=patient_id,
                 )
             )
 
-            print()
-            print(
-                "++++++++++++++++++++++++++++++++++++++++"
-            )
             print(
                 "Privacy Gateway processing succeeded."
             )
+
             print(
-                "++++++++++++++++++++++++++++++++++++++++"
+                "Sanitized patient data keys:",
+                list(
+                    sanitized_patient_data.keys()
+                )
+                if isinstance(
+                    sanitized_patient_data,
+                    dict
+                )
+                else "non-dict",
             )
-            print()
 
         except Exception as privacy_error:
 
-            print()
-            print("-" * 80)
+            print(
+                "\n"
+                + "-" * 80
+            )
+
             print(
                 "PRIVACY GATEWAY ERROR"
             )
-            print("-" * 80)
+
+            print(
+                "-" * 80
+            )
 
             print(
                 "Type:",
@@ -1187,10 +1288,6 @@ async def helasync_cds(
             )
 
             print(
-                "Full traceback:"
-            )
-
-            print(
                 traceback.format_exc()
             )
 
@@ -1198,19 +1295,23 @@ async def helasync_cds(
                 "-" * 80
             )
 
-            # ------------------------------------------------
-            # FAIL CLOSED
+            # IMPORTANT:
             #
-            # Do NOT send raw patient data to AI.
-            # ------------------------------------------------
+            # Fail closed.
+            #
+            # Never send raw FHIR data to the AI agents
+            # when the Privacy Gateway fails.
 
             return service_error_card(
-                "The HeLaSync Privacy Gateway "
-                "could not process the patient data."
+                "The HeLaSync Privacy Gateway could not "
+                "safely process the patient data. No patient "
+                "data was sent to the matching agents. "
+                "Please retry after the privacy service "
+                "has been corrected."
             )
 
         # ====================================================
-        # 6. SANITIZED PATIENT CONTEXT
+        # 6. BUILD SANITIZED AI CONTEXT
         # ====================================================
 
         patient_context = json.dumps(
@@ -1219,35 +1320,36 @@ async def helasync_cds(
             default=str,
         )
 
-        # ====================================================
-        # 7. BUILD AGENT PROMPT
-        # ====================================================
-
         prompt = f"""
-You are processing a CDS Hooks patient-view request for HeLaSync.
+You are processing a CDS Hooks patient-view request
+for HeLaSync.
 
-The patient information below has already passed through the
-HeLaSync Privacy Gateway.
+The following patient information has passed through
+the HeLaSync Privacy Gateway.
 
-Use only the sanitized patient information.
+Use ONLY the sanitized patient context below.
 
-Do not expose direct patient identifiers in a CDS card.
+Do not reproduce direct patient identifiers in any
+CDS card.
 
 SANITIZED PATIENT CONTEXT:
 
 {patient_context}
 
-AVAILABLE CLINICAL TRIALS:
+
+AVAILABLE TRIAL CATALOG:
 
 {json.dumps(
     trial_list,
     indent=2,
-    default=str,
+    default=str
 )}
 
-Run the HeLaSync five-agent clinical trial matching pipeline.
 
-The pipeline is:
+Run the HeLaSync five-agent clinical trial matching
+pipeline using the instructions defined for the agents.
+
+The five agents are:
 
 1. Patient_Data_Agent
 2. Clinical_Profile_Agent
@@ -1255,83 +1357,95 @@ The pipeline is:
 4. Eligibility_Verification_Agent
 5. CDS_Card_Agent
 
-Eligibility rules:
 
-- Do not assume missing information is positive.
-- UNKNOWN is different from NOT_MET.
-- A missing core/gating criterion must block presentation.
-- A confirmed exclusion must block presentation.
-- Do not calculate match percentages.
-- Do not diagnose a condition.
-- Do not recommend tests simply to make a patient eligible.
-- Only present a potential opportunity when the eligibility
-  verification supports it.
+ELIGIBILITY RULES:
 
-The CDS card must be concise and clinician-facing.
+- Do not treat a missing value as proof that a criterion
+  is met.
 
-For a qualifying trial, return:
+- Distinguish NOT_MET from UNKNOWN.
 
-{{
-    "cards": [
-        {{
-            "summary": "Potential Clinical Trial Opportunity",
-            "detail": "...",
-            "source": {{
-                "label": "HeLaSync"
-            }},
-            "extension": {{
-                "helasync_trial_id": "TRIAL_ID"
-            }}
-        }}
-    ]
-}}
+- If a core disease-defining criterion is NOT_MET or
+  UNKNOWN, do not present the trial as a potential
+  opportunity.
 
-For a nonmatching trial or insufficient information:
+- Do not present a trial when a disqualifying exclusion
+  is present.
+
+- Do not calculate a match percentage by counting
+  criteria.
+
+- Do not diagnose the patient.
+
+- Do not recommend testing solely to make the patient
+  eligible for a trial.
+
+- Secondary actionable information may remain UNKNOWN
+  when the core gating criteria are satisfied.
+
+
+CDS CARD REQUIREMENTS:
+
+Return valid JSON with this structure:
 
 {{
-    "cards": []
+  "cards": []
 }}
 
-Do not include the following in the CDS card:
 
-- eligibility criteria
-- laboratory values
-- match percentages
-- missing information
-- long descriptions
+For an appropriate clinical trial opportunity, the card
+summary must be exactly:
+
+"Potential Clinical Trial Opportunity"
+
+
+The internal trial identifier must be included in:
+
+"extension": {{
+    "helasync_trial_id": "<trial identifier>"
+}}
+
+
+The API will remove the internal extension before
+returning the CDS card.
+
+
+The CDS card must NOT contain:
+
+- Eligibility criteria
+- Laboratory values
+- Match percentages
+- Missing information
+- Long descriptions
 - Interested
 - Not Interested
 - Refer Patient
 - Enroll
 - Contact Site
 
-The HeLaSync API will add the Smart App link and Dismiss
-action after the agent response.
 
-Return valid JSON only.
+The clinician-facing card should only communicate that
+there is a potential clinical trial opportunity.
+
+Detailed trial information belongs in the HeLaSync
+Smart App.
 """
 
         # ====================================================
-        # 8. CREATE UNIQUE ADK SESSION
+        # 7. CREATE ADK SESSION
         # ====================================================
 
         adk_session_id = (
             f"cds-{uuid.uuid4().hex}"
         )
 
-        session = (
-            await session_service.create_session(
-                app_name=APP_NAME,
-                user_id=str(
-                    user_id
-                ),
-                session_id=adk_session_id,
-            )
+        session = await session_service.create_session(
+            app_name=APP_NAME,
+            user_id=str(
+                user_id
+            ),
+            session_id=adk_session_id,
         )
-
-        # ====================================================
-        # 9. CREATE ADK MESSAGE
-        # ====================================================
 
         content = types.Content(
             role="user",
@@ -1343,7 +1457,7 @@ Return valid JSON only.
         )
 
         # ====================================================
-        # 10. RUN FIVE-AGENT PIPELINE
+        # 8. RUN FIVE-AGENT PIPELINE
         # ====================================================
 
         final_output = None
@@ -1364,20 +1478,23 @@ Return valid JSON only.
 
                 final_output = "".join(
                     part.text
-                    for part in (
-                        event.content.parts
-                    )
+                    for part in event.content.parts
                     if getattr(
                         part,
                         "text",
-                        None,
+                        None
                     )
                 )
+
+        # ====================================================
+        # 9. HANDLE EMPTY AGENT RESPONSE
+        # ====================================================
 
         if not final_output:
 
             print(
-                "Agent pipeline returned no final output."
+                "The agent pipeline returned "
+                "no final output."
             )
 
             return {
@@ -1385,11 +1502,12 @@ Return valid JSON only.
             }
 
         # ====================================================
-        # 11. CLEAN AGENT JSON
+        # 10. CLEAN AGENT RESPONSE
         # ====================================================
 
         cleaned = (
-            final_output.strip()
+            final_output
+            .strip()
         )
 
         cleaned = re.sub(
@@ -1406,7 +1524,7 @@ Return valid JSON only.
         )
 
         # ====================================================
-        # 12. PARSE JSON
+        # 11. PARSE JSON
         # ====================================================
 
         try:
@@ -1426,7 +1544,7 @@ Return valid JSON only.
             if not match:
 
                 print(
-                    "Agent returned invalid JSON:"
+                    "Agent returned non-JSON output:"
                 )
 
                 print(
@@ -1437,13 +1555,33 @@ Return valid JSON only.
                     "cards": []
                 }
 
-            result = json.loads(
-                match.group(0)
-            )
+            try:
+
+                result = json.loads(
+                    match.group(0)
+                )
+
+            except json.JSONDecodeError:
+
+                print(
+                    "Unable to parse agent JSON:"
+                )
+
+                print(
+                    cleaned[:2000]
+                )
+
+                return {
+                    "cards": []
+                }
+
+        # ====================================================
+        # 12. VALIDATE AGENT RESULT
+        # ====================================================
 
         if not isinstance(
             result,
-            dict,
+            dict
         ):
 
             return {
@@ -1452,12 +1590,12 @@ Return valid JSON only.
 
         cards = result.get(
             "cards",
-            [],
+            []
         )
 
         if not isinstance(
             cards,
-            list,
+            list
         ):
 
             return {
@@ -1474,15 +1612,20 @@ Return valid JSON only.
 
             if not isinstance(
                 card,
-                dict,
+                dict
             ):
+
                 continue
 
+            # Only allow the approved opportunity card.
             if as_text(
-                card.get("summary")
+                card.get(
+                    "summary"
+                )
             ) != (
                 "Potential Clinical Trial Opportunity"
             ):
+
                 continue
 
             formatted_card = (
@@ -1499,17 +1642,26 @@ Return valid JSON only.
             )
 
         # ====================================================
-        # 14. FINAL RESPONSE
+        # 14. FINAL CDS RESPONSE
         # ====================================================
 
         response = {
             "cards": formatted_cards
         }
 
-        print()
         print(
-            "FINAL CDS RESPONSE"
+            "\n"
+            + "=" * 80
         )
+
+        print(
+            "CDS RESPONSE"
+        )
+
+        print(
+            "=" * 80
+        )
+
         print(
             json.dumps(
                 response,
@@ -1518,34 +1670,23 @@ Return valid JSON only.
             )
         )
 
+        print(
+            "=" * 80
+        )
+
         return response
 
     except Exception:
 
-        print()
         print(
-            "=" * 80
-        )
-        print(
-            "HELASYNC CDS HANDLER ERROR"
-        )
-        print(
-            "=" * 80
-        )
-
-        print(
-            traceback.format_exc()
-        )
-
-        print(
-            "=" * 80
+            "HELASYNC CDS HANDLER ERROR:\n",
+            traceback.format_exc(),
         )
 
         return service_error_card(
-            "HeLaSync encountered an unexpected "
-            "error while processing this request. "
-            "No clinical trial recommendation "
-            "was generated."
+            "HeLaSync encountered an unexpected error "
+            "while processing this request. No clinical "
+            "trial recommendation was generated."
         )
 
 
@@ -1569,9 +1710,7 @@ async def list_referrals_endpoint():
     return list_referrals()
 
 
-@app.get(
-    "/referrals/{referral_id}"
-)
+@app.get("/referrals/{referral_id}")
 async def get_referral_endpoint(
     referral_id: str,
 ):
