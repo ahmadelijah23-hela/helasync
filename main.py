@@ -952,7 +952,7 @@ The final response must be valid JSON.
         session = (
             await session_service.create_session(
 
-                app_name:
+                app_name=APP_NAME,
                     APP_NAME,
 
                 user_id:
