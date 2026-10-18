@@ -1090,11 +1090,63 @@ def build_trial_information(
             )
         )
 
-    if not locations:
+    # --------------------------------------------------------
+    # OVERVIEW CONTENT
+    # --------------------------------------------------------
 
-        locations = [
-            institution
-        ]
+    description_module = trial.get(
+        "descriptionModule",
+        {}
+    )
+
+    if not isinstance(
+        description_module,
+        dict
+    ):
+        description_module = {}
+
+    synopsis = first_non_empty(
+        description_module.get(
+            "briefSummary"
+        ),
+        trial.get(
+            "brief_summary"
+        ),
+        trial.get(
+            "briefSummary"
+        ),
+        trial.get(
+            "synopsis"
+        ),
+        trial.get(
+            "description"
+        ),
+        default=(
+            "Information not available"
+        ),
+    )
+
+    goal = first_non_empty(
+        trial.get(
+            "goal"
+        ),
+        trial.get(
+            "purpose"
+        ),
+        trial.get(
+            "study_goal"
+        ),
+        objectives[0] if objectives else None,
+        default=(
+            "Information not available"
+        ),
+    )
+
+    location = (
+        locations[0]
+        if locations
+        else "Information not available"
+    )
 
     # --------------------------------------------------------
     # ELIGIBILITY
@@ -1128,6 +1180,15 @@ def build_trial_information(
 
         "disease_population":
             disease_population,
+
+        "synopsis":
+            synopsis,
+
+        "goal":
+            goal,
+
+        "location":
+            location,
 
         "pi_name":
             pi_name,
@@ -1548,6 +1609,94 @@ def render_smart_app(
                     "official_title"
                 ]
             )}
+        </div>
+
+    </div>
+
+    <div class="overview-detail-grid">
+
+        <div class="overview-synopsis">
+
+            <div class="mini-label">
+                📄 Synopsis
+            </div>
+
+            <div class="overview-synopsis-text">
+                {esc(
+                    trial_info[
+                        "synopsis"
+                    ]
+                )}
+            </div>
+
+        </div>
+
+        <div class="overview-meta-grid">
+
+            <div class="overview-meta-box">
+
+                <div class="mini-label">
+                    🎯 Goal
+                </div>
+
+                <div class="overview-meta-value">
+                    {esc(
+                        trial_info[
+                            "goal"
+                        ]
+                    )}
+                </div>
+
+            </div>
+
+            <div class="overview-meta-box">
+
+                <div class="mini-label">
+                    ◷ Duration
+                </div>
+
+                <div class="overview-meta-value">
+                    {esc(
+                        trial_info[
+                            "duration"
+                        ]
+                    )}
+                </div>
+
+            </div>
+
+            <div class="overview-meta-box">
+
+                <div class="mini-label">
+                    📍 Location
+                </div>
+
+                <div class="overview-meta-value">
+                    {esc(
+                        trial_info[
+                            "location"
+                        ]
+                    )}
+                </div>
+
+            </div>
+
+            <div class="overview-meta-box">
+
+                <div class="mini-label">
+                    $ Compensation
+                </div>
+
+                <div class="overview-meta-value">
+                    {esc(
+                        trial_info[
+                            "reimbursement"
+                        ]
+                    )}
+                </div>
+
+            </div>
+
         </div>
 
     </div>
@@ -2318,6 +2467,77 @@ body {{
         repeat(4, minmax(0, 1fr));
 
     gap: 12px;
+}}
+
+.overview-detail-grid {{
+
+    display: grid;
+
+    grid-template-columns:
+        minmax(0, 1.35fr) minmax(0, 1fr);
+
+    gap: 12px;
+
+    margin-top: 13px;
+}}
+
+.overview-synopsis {{
+
+    min-height: 190px;
+
+    padding: 15px;
+
+    border: 1px solid #e3eaf2;
+
+    border-radius: 10px;
+
+    background: #fbfcfe;
+}}
+
+.overview-synopsis-text {{
+
+    margin-top: 8px;
+
+    color: #475569;
+
+    font-size: 12px;
+
+    line-height: 1.65;
+}}
+
+.overview-meta-grid {{
+
+    display: grid;
+
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+
+    gap: 12px;
+}}
+
+.overview-meta-box {{
+
+    min-height: 89px;
+
+    padding: 13px;
+
+    border: 1px solid #e3eaf2;
+
+    border-radius: 10px;
+
+    background: #ffffff;
+}}
+
+.overview-meta-value {{
+
+    margin-top: 6px;
+
+    color: #243447;
+
+    font-size: 13px;
+
+    font-weight: 700;
+
+    line-height: 1.4;
 }}
 
 .info-box {{
@@ -3242,7 +3462,7 @@ body {{
 }}
 
 
-.radio-option {{
+.radio-option {
 
     display: flex;
     align-items: center;
@@ -3254,15 +3474,15 @@ body {{
     color: #334155;
     font-size: 12px;
     cursor: pointer;
-}}
+}
 
-.radio-option:hover {{
+.radio-option:hover {
     background: #f8fafc;
-}}
+}
 
-.radio-option input {{
+.radio-option input {
     margin: 0;
-}}
+}
 
 /* =========================================================
    RESPONSIVE
@@ -3346,6 +3566,18 @@ body {{
 
         text-align:
             center;
+    }}
+
+}}
+
+@media (max-width: 760px) {{
+
+    .overview-detail-grid {{
+        grid-template-columns: 1fr;
+    }}
+
+    .overview-meta-grid {{
+        grid-template-columns: 1fr 1fr;
     }}
 
 }}
