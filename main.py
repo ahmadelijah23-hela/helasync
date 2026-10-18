@@ -689,6 +689,7 @@ the final CDS Hooks response.
                     )
                 )
 
+                # Smart App launch link.
                 card["links"] = [
                     {
                         "label": "View Trial Details",
@@ -699,6 +700,17 @@ the final CDS Hooks response.
 
             else:
                 card["links"] = []
+
+            # CDS Hooks suggestions are rendered as action buttons by
+            # CDS clients such as the Sandbox. Dismiss is intentionally
+            # a suggestion rather than a link so it can appear as a
+            # button and does not launch the Smart App.
+            card["selectionBehavior"] = "at-most-one"
+            card["suggestions"] = [
+                {
+                    "label": "Dismiss"
+                }
+            ]
 
             normalized_cards.append(card)
 
