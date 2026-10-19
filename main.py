@@ -25,6 +25,8 @@ from research_dashboard import (
 
 from referral_launch import (
     router as referral_launch_router,
+    get_trial,
+    build_trial_information,
 )
 
 
@@ -676,6 +678,71 @@ the final CDS Hooks response.
             card["indicator"] = "info"
 
             if trial_id:
+                # ----------------------------------------------------
+                # Populate clinician-facing trial metadata directly
+                # from the canonical trial record. Agent 5 may return
+                # a generic fallback such as "PI: Not listed" even
+                # when the trial JSON contains the PI.
+                # ----------------------------------------------------
+                try:
+                    trial_record = get_trial(trial_id)
+                    if trial_record:
+                        trial_info = build_trial_information(
+                            trial_id,
+                            trial_record,
+                        )
+
+                        pi_name = str(
+                            trial_info.get("pi_name", "")
+                        ).strip()
+
+                        canonical_trial_name = str(
+                            trial_info.get("trial_name", "")
+                        ).strip()
+
+                        # Preserve the Agent 5 detail when useful, but
+                        # replace the PI fallback with the canonical PI.
+                        if pi_name and pi_name.lower() not in {
+                            "information not available",
+                            "not listed",
+                            "unknown",
+                        }:
+                            lines = detail.splitlines()
+                            replaced_pi = False
+
+                            for index, line in enumerate(lines):
+                                if line.strip().lower().startswith("pi:"):
+                                    lines[index] = f"PI: {pi_name}"
+                                    replaced_pi = True
+                                    break
+
+                            if replaced_pi:
+                                detail = "\n".join(lines)
+                            else:
+                                detail = (
+                                    f"{detail.rstrip()}\n\nPI: {pi_name}"
+                                )
+
+                        # If Agent 5 did not provide a usable trial name,
+                        # use the canonical name from the trial record.
+                        if canonical_trial_name and (
+                            not detail
+                            or detail.strip() == "HeLaSync:"
+                        ):
+                            detail = (
+                                f"HeLaSync: {canonical_trial_name}"
+                            )
+
+                except Exception as trial_metadata_error:
+                    # Metadata enrichment must never break the CDS card.
+                    print(
+                        "Trial metadata enrichment warning: "
+                        f"{type(trial_metadata_error).__name__}: "
+                        f"{trial_metadata_error}"
+                    )
+
+                card["detail"] = detail
+
                 referral_url = (
                     "https://helasync.onrender.com/referral-launch?"
                     + urlencode(
