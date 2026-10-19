@@ -7,6 +7,10 @@ from urllib.parse import urlencode
 from html import escape
 import json
 import uuid
+import os
+import re
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 from referral import create_referral
 
@@ -394,187 +398,612 @@ def parse_inclusion_exclusion(
 
 
 # ============================================================
-# DEMO PATIENT-SPECIFIC ELIGIBILITY
+# DYNAMIC FHIR PATIENT DATA
 # ============================================================
 
-def build_demo_eligibility(
-    trial_id: str
-) -> List[Dict[str, str]]:
+FHIR_SERVER_URL = os.getenv(
+    "FHIR_SERVER_URL",
+    "https://hapi.fhir.org/baseR4",
+).rstrip("/")
 
+
+def fetch_fhir_json(path: str) -> Dict[str, Any]:
+    """Fetch one FHIR resource/search result from the configured server."""
+
+    url = FHIR_SERVER_URL + "/" + path.lstrip("/")
+
+    request = Request(
+        url,
+        headers={
+            "Accept": "application/fhir+json",
+        },
+        method="GET",
+    )
+
+    with urlopen(request, timeout=8) as response:
+        payload = response.read().decode("utf-8")
+
+    data = json.loads(payload)
+
+    if not isinstance(data, dict):
+        raise ValueError("FHIR server returned a non-object response")
+
+    return data
+
+
+def fetch_patient_context(patient_id: str) -> Dict[str, Any]:
+    """Retrieve the current patient's FHIR resources dynamically.
+
+    The patient ID comes from the CDS Hooks launch context. Nothing here is
+    tied to John Doe or to a particular synthetic patient.
     """
-    Stage 3A prototype display only.
 
-    Agent 4 remains the eligibility source of truth.
-    This section is intentionally labeled as a
-    prototype/demo representation.
-    """
+    patient_id = safe_text(patient_id)
 
-    trial_id = safe_text(
-        trial_id
-    ).upper()
-
-    common = [
-        {
-            "criterion": "Age ≥18",
-            "status": "MET",
-            "category": "Gating",
-            "evidence":
-                "Synthetic patient age is 65.",
+    if not patient_id:
+        return {
+            "patient": {},
+            "conditions": [],
+            "observations": [],
+            "medications": [],
+            "patient_id": "",
+            "error": "No patient_id was supplied by the CDS launch context.",
         }
-    ]
 
-    if trial_id == "NCTFAKE003":
+    if patient_id.lower().startswith("patient/"):
+        patient_id = patient_id.split("/", 1)[1]
 
-        return common + [
+    encoded_id = quote(patient_id, safe="")
 
-            {
-                "criterion":
-                    "Heart failure",
-                "status":
-                    "MET",
-                "category":
-                    "Gating",
-                "evidence":
-                    "Heart failure is documented.",
-            },
+    try:
+        patient = fetch_fhir_json(
+            f"Patient/{encoded_id}"
+        )
 
-            {
-                "criterion":
-                    "NT-proBNP >300",
-                "status":
-                    "MET",
-                "category":
-                    "Secondary",
-                "evidence":
-                    "NT-proBNP is documented at "
-                    "1200 pg/mL.",
-            },
+        condition_bundle = fetch_fhir_json(
+            f"Condition?patient={encoded_id}&_count=100"
+        )
 
-            {
-                "criterion":
-                    "Pregnancy",
-                "status":
-                    "CLEAR",
-                "category":
-                    "Exclusion",
-                "evidence":
-                    "Pregnancy is not present.",
-            },
+        observation_bundle = fetch_fhir_json(
+            f"Observation?patient={encoded_id}&_count=100"
+        )
 
-            {
-                "criterion":
-                    "eGFR <30",
-                "status":
-                    "CLEAR",
-                "category":
-                    "Exclusion",
-                "evidence":
-                    "eGFR is documented at 65.",
-            },
+        medication_bundle = fetch_fhir_json(
+            f"MedicationRequest?patient={encoded_id}&_count=100"
+        )
+
+        conditions = [
+            entry.get("resource", {})
+            for entry in condition_bundle.get("entry", [])
+            if isinstance(entry, dict)
+            and isinstance(entry.get("resource"), dict)
         ]
 
-    if trial_id == "NCTFAKE002":
-
-        return common + [
-
-            {
-                "criterion":
-                    "Heart failure",
-                "status":
-                    "MET",
-                "category":
-                    "Gating",
-                "evidence":
-                    "Heart failure is documented.",
-            },
-
-            {
-                "criterion":
-                    "Confirmed cardiac amyloidosis",
-                "status":
-                    "BLOCKED",
-                "category":
-                    "Gating",
-                "evidence":
-                    "Confirmed cardiac amyloidosis "
-                    "is not documented.",
-            },
-
-            {
-                "criterion":
-                    "NT-proBNP >300",
-                "status":
-                    "MET",
-                "category":
-                    "Secondary",
-                "evidence":
-                    "NT-proBNP is documented at "
-                    "1200 pg/mL.",
-            },
-
-            {
-                "criterion":
-                    "Pregnancy",
-                "status":
-                    "CLEAR",
-                "category":
-                    "Exclusion",
-                "evidence":
-                    "Pregnancy is not present.",
-            },
-
-            {
-                "criterion":
-                    "eGFR <30",
-                "status":
-                    "CLEAR",
-                "category":
-                    "Exclusion",
-                "evidence":
-                    "eGFR is documented at 65.",
-            },
+        observations = [
+            entry.get("resource", {})
+            for entry in observation_bundle.get("entry", [])
+            if isinstance(entry, dict)
+            and isinstance(entry.get("resource"), dict)
         ]
 
-    if trial_id == "NCTFAKE001":
-
-        return common + [
-
-            {
-                "criterion":
-                    "Type 2 diabetes",
-                "status":
-                    "NOT_MET",
-                "category":
-                    "Gating",
-                "evidence":
-                    "Type 2 diabetes is not "
-                    "documented.",
-            },
-
-            {
-                "criterion":
-                    "HbA1c 6.5–8.0%",
-                "status":
-                    "UNKNOWN",
-                "category":
-                    "Secondary",
-                "evidence":
-                    "HbA1c is not documented.",
-            },
-
-            {
-                "criterion":
-                    "Heart failure exclusion",
-                "status":
-                    "NOT_MET",
-                "category":
-                    "Exclusion",
-                "evidence":
-                    "Heart failure is documented.",
-            },
+        medications = [
+            entry.get("resource", {})
+            for entry in medication_bundle.get("entry", [])
+            if isinstance(entry, dict)
+            and isinstance(entry.get("resource"), dict)
         ]
 
-    return common
+        return {
+            "patient": patient,
+            "conditions": conditions,
+            "observations": observations,
+            "medications": medications,
+            "patient_id": patient_id,
+            "error": "",
+        }
+
+    except Exception as exc:
+        print(
+            f"Could not retrieve FHIR patient context for "
+            f"{patient_id}: {exc}"
+        )
+
+        return {
+            "patient": {},
+            "conditions": [],
+            "observations": [],
+            "medications": [],
+            "patient_id": patient_id,
+            "error": str(exc),
+        }
+
+
+def _codeable_text(value: Any) -> str:
+    """Extract human-readable text from a FHIR CodeableConcept."""
+
+    if isinstance(value, str):
+        return safe_text(value)
+
+    if not isinstance(value, dict):
+        return ""
+
+    parts = []
+
+    text_value = safe_text(value.get("text"))
+
+    if text_value:
+        parts.append(text_value)
+
+    for coding in normalize_list(value.get("coding")):
+        if not isinstance(coding, dict):
+            continue
+
+        display = safe_text(coding.get("display"))
+        code = safe_text(coding.get("code"))
+
+        if display:
+            parts.append(display)
+        elif code:
+            parts.append(code)
+
+    return " ".join(dict.fromkeys(parts))
+
+
+def _condition_text(condition: Dict[str, Any]) -> str:
+    return " ".join(
+        part
+        for part in [
+            _codeable_text(condition.get("code")),
+            _codeable_text(condition.get("category")),
+        ]
+        if part
+    ).lower()
+
+
+def _condition_is_confirmed(condition: Dict[str, Any]) -> bool:
+    verification = condition.get("verificationStatus", {})
+
+    if not isinstance(verification, dict):
+        return False
+
+    for coding in normalize_list(verification.get("coding")):
+        if not isinstance(coding, dict):
+            continue
+
+        code = safe_text(coding.get("code")).lower()
+        display = safe_text(coding.get("display")).lower()
+
+        if code == "confirmed" or display == "confirmed":
+            return True
+
+    text_value = safe_text(verification.get("text")).lower()
+
+    return "confirmed" in text_value
+
+
+def _condition_matches(
+    conditions: List[Dict[str, Any]],
+    terms: List[str],
+    require_confirmed: bool = False,
+) -> Optional[Dict[str, Any]]:
+    for condition in conditions:
+        if not isinstance(condition, dict):
+            continue
+
+        text = _condition_text(condition)
+
+        if all(term.lower() in text for term in terms):
+            if require_confirmed and not _condition_is_confirmed(condition):
+                continue
+
+            return condition
+
+    return None
+
+
+def calculate_patient_age(patient: Dict[str, Any]) -> Optional[int]:
+    birth_date = safe_text(patient.get("birthDate"))
+
+    if not birth_date:
+        return None
+
+    try:
+        birth = datetime.strptime(
+            birth_date[:10],
+            "%Y-%m-%d",
+        ).date()
+
+        today = datetime.now(timezone.utc).date()
+
+        age = today.year - birth.year
+
+        if (today.month, today.day) < (birth.month, birth.day):
+            age -= 1
+
+        return age
+
+    except ValueError:
+        return None
+
+
+def observation_text(observation: Dict[str, Any]) -> str:
+    return " ".join(
+        part
+        for part in [
+            _codeable_text(observation.get("code")),
+            safe_text(observation.get("valueString")),
+        ]
+        if part
+    ).lower()
+
+
+def observation_numeric_value(
+    observation: Dict[str, Any]
+) -> Optional[float]:
+    value_quantity = observation.get("valueQuantity")
+
+    if isinstance(value_quantity, dict):
+        value = value_quantity.get("value")
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            pass
+
+    value = observation.get("value")
+
+    if isinstance(value, (int, float)):
+        return float(value)
+
+    return None
+
+
+def find_observation(
+    observations: List[Dict[str, Any]],
+    terms: List[str],
+) -> Optional[Dict[str, Any]]:
+    for observation in observations:
+        if not isinstance(observation, dict):
+            continue
+
+        text = observation_text(observation)
+
+        if all(term.lower() in text for term in terms):
+            return observation
+
+    return None
+
+
+def patient_has_pregnancy(
+    patient: Dict[str, Any],
+    conditions: List[Dict[str, Any]],
+    observations: List[Dict[str, Any]],
+) -> Optional[bool]:
+    gender = safe_text(patient.get("gender")).lower()
+
+    pregnancy_condition = _condition_matches(
+        conditions,
+        ["pregnancy"],
+    )
+
+    if pregnancy_condition:
+        return True
+
+    pregnancy_observation = find_observation(
+        observations,
+        ["pregnancy"],
+    )
+
+    if pregnancy_observation:
+        return True
+
+    if gender == "male":
+        return False
+
+    if gender == "female":
+        return False
+
+    return None
+
+
+def build_patient_summary(
+    patient_context: Dict[str, Any]
+) -> Dict[str, Any]:
+    patient = patient_context.get("patient", {})
+    conditions = patient_context.get("conditions", [])
+    observations = patient_context.get("observations", [])
+    medications = patient_context.get("medications", [])
+
+    age = calculate_patient_age(patient)
+
+    heart_failure = _condition_matches(
+        conditions,
+        ["heart failure"],
+    )
+
+    cardiac_amyloidosis = _condition_matches(
+        conditions,
+        ["cardiac", "amyloidosis"],
+        require_confirmed=True,
+    )
+
+    if cardiac_amyloidosis is None:
+        cardiac_amyloidosis = _condition_matches(
+            conditions,
+            ["amyloid", "cardiomyopathy"],
+            require_confirmed=True,
+        )
+
+    ntprobnp = find_observation(
+        observations,
+        ["nt-probnp"],
+    )
+
+    if ntprobnp is None:
+        ntprobnp = find_observation(
+            observations,
+            ["ntprobnp"],
+        )
+
+    egfr = find_observation(
+        observations,
+        ["egfr"],
+    )
+
+    tafamidis = None
+
+    for medication in medications:
+        medication_text = " ".join(
+            part
+            for part in [
+                _codeable_text(
+                    medication.get("medicationCodeableConcept")
+                ),
+                safe_text(
+                    medication.get("medicationReference", {}).get("display")
+                    if isinstance(medication.get("medicationReference"), dict)
+                    else ""
+                ),
+            ]
+            if part
+        ).lower()
+
+        if "tafamidis" in medication_text:
+            tafamidis = medication
+            break
+
+    return {
+        "patient_id": patient_context.get("patient_id", ""),
+        "patient": patient,
+        "age": age,
+        "gender": safe_text(patient.get("gender")),
+        "heart_failure": heart_failure is not None,
+        "heart_failure_resource": heart_failure,
+        "cardiac_amyloidosis": cardiac_amyloidosis is not None,
+        "cardiac_amyloidosis_resource": cardiac_amyloidosis,
+        "ntprobnp": observation_numeric_value(ntprobnp) if ntprobnp else None,
+        "ntprobnp_resource": ntprobnp,
+        "egfr": observation_numeric_value(egfr) if egfr else None,
+        "egfr_resource": egfr,
+        "pregnancy": patient_has_pregnancy(
+            patient,
+            conditions,
+            observations,
+        ),
+        "tafamidis": tafamidis is not None,
+        "medications": medications,
+        "error": patient_context.get("error", ""),
+    }
+
+
+def evaluate_trial_eligibility(
+    trial: Dict[str, Any],
+    patient_context: Dict[str, Any],
+) -> List[Dict[str, str]]:
+    """Evaluate the current patient's FHIR data against the trial criteria.
+
+    This is deliberately patient-agnostic. The patient_id comes from the
+    CDS Hooks launch context, and the criteria come from the trial JSON.
+    """
+
+    criteria = parse_inclusion_exclusion(
+        get_eligibility_module(trial)
+    )
+
+    summary = build_patient_summary(
+        patient_context
+    )
+
+    results: List[Dict[str, str]] = []
+
+    for criterion in criteria.get("inclusion", []):
+        results.append(
+            evaluate_single_criterion(
+                criterion,
+                classify_inclusion_category(criterion),
+                summary,
+            )
+        )
+
+    for criterion in criteria.get("exclusion", []):
+        results.append(
+            evaluate_single_criterion(
+                criterion,
+                "Exclusion",
+                summary,
+            )
+        )
+
+    return results
+
+
+def classify_inclusion_category(criterion: str) -> str:
+    """Classify an inclusion criterion for the Smart App display."""
+
+    lower = safe_text(criterion).lower()
+
+    if "age" in lower:
+        return "Gating"
+
+    if "heart failure" in lower:
+        return "Gating"
+
+    if "cardiac amyloidosis" in lower:
+        return "Gating"
+
+    return "Secondary"
+
+
+def evaluate_single_criterion(
+    criterion: str,
+    category: str,
+    summary: Dict[str, Any],
+) -> Dict[str, str]:
+    text = safe_text(criterion)
+    lower = text.lower()
+
+    status = "UNKNOWN"
+    evidence = "The required patient information is not available."
+
+    # Age criteria.
+    if "age" in lower:
+        match = re.search(r"(?:≥|>=|at least|older than|age of)\s*(\d+)", lower)
+
+        if match is None:
+            match = re.search(r"(\d+)\s*(?:years?\s*or\s*older|years?\s*and\s*older)", lower)
+
+        if match:
+            required_age = int(match.group(1))
+            age = summary.get("age")
+
+            if age is None:
+                status = "UNKNOWN"
+                evidence = "Patient date of birth is not available."
+            else:
+                status = "MET" if age >= required_age else "NOT_MET"
+                evidence = f"Patient age is {age}."
+
+            return {
+                "criterion": text,
+                "status": status,
+                "category": category,
+                "evidence": evidence,
+            }
+
+    # Heart failure.
+    if "heart failure" in lower:
+        if summary.get("heart_failure"):
+            status = "MET"
+            evidence = "Heart failure is documented in the patient's FHIR record."
+        else:
+            status = "NOT_MET"
+            evidence = "Heart failure is not documented in the patient's FHIR record."
+
+        return {
+            "criterion": text,
+            "status": status,
+            "category": category,
+            "evidence": evidence,
+        }
+
+    # Confirmed cardiac amyloidosis.
+    if "cardiac amyloidosis" in lower:
+        resource = summary.get("cardiac_amyloidosis_resource")
+
+        if resource is not None:
+            status = "MET"
+            evidence = "Confirmed cardiac amyloidosis is documented in the patient's FHIR record."
+        else:
+            status = "NOT_MET"
+            evidence = "Confirmed cardiac amyloidosis is not documented in the patient's FHIR record."
+
+        return {
+            "criterion": text,
+            "status": status,
+            "category": category,
+            "evidence": evidence,
+        }
+
+    # NT-proBNP threshold.
+    if "nt-probnp" in lower or "ntprobnp" in lower:
+        value = summary.get("ntprobnp")
+
+        threshold_match = re.search(
+            r"(?:greater than|above|over|>)\s*(\d+(?:\.\d+)?)",
+            lower,
+        )
+
+        if value is None:
+            status = "UNKNOWN"
+            evidence = "NT-proBNP is not documented in the patient's FHIR record."
+        elif threshold_match:
+            threshold = float(threshold_match.group(1))
+            status = "MET" if value > threshold else "NOT_MET"
+            evidence = f"NT-proBNP is documented at {value:g} pg/mL."
+        else:
+            status = "UNKNOWN"
+            evidence = f"NT-proBNP is documented at {value:g} pg/mL, but the threshold could not be parsed."
+
+        return {
+            "criterion": text,
+            "status": status,
+            "category": category,
+            "evidence": evidence,
+        }
+
+    # Pregnancy exclusion.
+    if "pregnancy" in lower:
+        pregnancy = summary.get("pregnancy")
+
+        if pregnancy is True:
+            status = "NOT_MET"
+            evidence = "Pregnancy is documented in the patient's FHIR record."
+        elif pregnancy is False:
+            status = "CLEAR"
+            evidence = "Pregnancy is not documented for this patient."
+        else:
+            status = "UNKNOWN"
+            evidence = "Pregnancy status cannot be determined from the available FHIR data."
+
+        return {
+            "criterion": text,
+            "status": status,
+            "category": category,
+            "evidence": evidence,
+        }
+
+    # eGFR threshold.
+    if "egfr" in lower or "renal impairment" in lower:
+        value = summary.get("egfr")
+
+        threshold_match = re.search(
+            r"(?:below|less than|under|<)\s*(\d+(?:\.\d+)?)",
+            lower,
+        )
+
+        if value is None:
+            status = "UNKNOWN"
+            evidence = "eGFR is not documented in the patient's FHIR record."
+        elif threshold_match:
+            threshold = float(threshold_match.group(1))
+            status = "NOT_MET" if value < threshold else "CLEAR"
+            evidence = f"eGFR is documented at {value:g} mL/min/1.73 m²."
+        else:
+            status = "UNKNOWN"
+            evidence = f"eGFR is documented at {value:g}, but the renal threshold could not be parsed."
+
+        return {
+            "criterion": text,
+            "status": status,
+            "category": category,
+            "evidence": evidence,
+        }
+
+    return {
+        "criterion": text,
+        "status": status,
+        "category": category,
+        "evidence": evidence,
+    }
 
 
 # ============================================================
@@ -842,41 +1271,27 @@ def build_trial_information(
             )
         )
 
-    pi_demo = not bool(
-        pi_name
-    )
-
     if not pi_name:
-
-        pi_name = (
-            "Dr. Sarah Mitchell, MD"
-        )
+        pi_name = "Information not available"
 
     institution = first_non_empty(
-        trial.get(
-            "institution"
-        ),
-        trial.get(
-            "research_site"
-        ),
-        default="University Hospital Colorado",
+        trial.get("institution"),
+        trial.get("research_site"),
+        default="Information not available",
     )
 
     research_team = first_non_empty(
         trial.get(
             "research_team"
         ),
-        default=(
-            "HeLaSync Heart Failure "
-            "Research Team"
-        ),
+        default="Information not available",
     )
 
     research_email = first_non_empty(
         trial.get(
             "research_email"
         ),
-        default="research@helasync.org",
+        default="Information not available",
     )
 
     # --------------------------------------------------------
@@ -918,19 +1333,9 @@ def build_trial_information(
         trial.get(
             "duration"
         ),
-        default=(
-            "Approximately 12–24 months"
-        ),
+        default="Information not available",
     )
 
-    duration_demo = not bool(
-        trial.get(
-            "study_duration"
-        )
-        or trial.get(
-            "duration"
-        )
-    )
 
     # --------------------------------------------------------
     # REIMBURSEMENT
@@ -943,20 +1348,9 @@ def build_trial_information(
         trial.get(
             "participant_reimbursement"
         ),
-        default=(
-            "Up to $500 total "
-            "participant reimbursement"
-        ),
+        default="Information not available",
     )
 
-    reimbursement_demo = not bool(
-        trial.get(
-            "reimbursement"
-        )
-        or trial.get(
-            "participant_reimbursement"
-        )
-    )
 
     # --------------------------------------------------------
     # PROCEDURES
@@ -1163,6 +1557,9 @@ def build_trial_information(
         "trial_id":
             trial_id,
 
+        "_trial":
+            trial,
+
         "trial_name":
             trial_name,
 
@@ -1193,8 +1590,6 @@ def build_trial_information(
         "pi_name":
             pi_name,
 
-        "pi_demo":
-            pi_demo,
 
         "institution":
             institution,
@@ -1221,14 +1616,10 @@ def build_trial_information(
         "duration":
             duration,
 
-        "duration_demo":
-            duration_demo,
 
         "reimbursement":
             reimbursement,
 
-        "reimbursement_demo":
-            reimbursement_demo,
 
         "procedures":
             procedures,
@@ -1258,74 +1649,57 @@ def build_trial_information(
 # ============================================================
 
 def build_match_explanation(
-    trial_id: str
+    eligibility: List[Dict[str, str]],
 ) -> Dict[str, str]:
+    """Generate the match explanation from the current patient's results."""
 
-    trial_id = safe_text(
-        trial_id
-    ).upper()
+    gating = [
+        item
+        for item in eligibility
+        if safe_text(item.get("category")).lower() == "gating"
+    ]
 
-    if trial_id == "NCTFAKE003":
+    not_met = [
+        item
+        for item in gating
+        if safe_text(item.get("status")).upper() == "NOT_MET"
+    ]
 
+    unknown = [
+        item
+        for item in gating
+        if safe_text(item.get("status")).upper() == "UNKNOWN"
+    ]
+
+    if not_met:
+        first = not_met[0]
         return {
-
-            "headline":
-                "Core trial population appears to fit.",
-
-            "body":
-                (
-                    "The available synthetic patient "
-                    "information documents heart failure "
-                    "and an NT-proBNP value above the study "
-                    "threshold. No blocking exclusion "
-                    "criterion is identified in the "
-                    "prototype review."
-                ),
+            "headline": "A required trial criterion is not met.",
+            "body": (
+                f"{first.get('criterion')} is not supported by the "
+                f"available patient data. This gating criterion prevents "
+                f"the trial from being presented as a potential match."
+            ),
         }
 
-    if trial_id == "NCTFAKE002":
-
+    if unknown:
+        first = unknown[0]
         return {
-
-            "headline":
-                "Review blocked by a gating criterion.",
-
-            "body":
-                (
-                    "Heart failure is documented, but "
-                    "confirmed cardiac amyloidosis is not "
-                    "documented. Because this is a core "
-                    "gating criterion, the trial should "
-                    "not be presented as a potential match."
-                ),
-        }
-
-    if trial_id == "NCTFAKE001":
-
-        return {
-
-            "headline":
-                "A required disease criterion is not documented.",
-
-            "body":
-                (
-                    "Type 2 diabetes is not documented "
-                    "for the synthetic patient, so the "
-                    "trial is not presented as a potential "
-                    "match."
-                ),
+            "headline": "Additional patient information is needed.",
+            "body": (
+                f"The available FHIR data cannot determine "
+                f"{first.get('criterion')}. The trial should be reviewed "
+                f"before considering the patient a potential match."
+            ),
         }
 
     return {
-
-        "headline":
-            "Potential match identified.",
-
-        "body":
-            (
-                "The available information was sufficient "
-                "to surface this trial for clinician review."
-            ),
+        "headline": "Core trial population appears to fit.",
+        "body": (
+            "The available patient-specific FHIR information satisfies "
+            "the required gating criteria. Secondary criteria and "
+            "exclusion criteria are shown below for clinician review."
+        ),
     }
 
 
@@ -1358,18 +1732,7 @@ def render_bullets(
 def render_info_box(
     label: str,
     value: str,
-    demo: bool = False,
 ) -> str:
-
-    demo_html = ""
-
-    if demo:
-
-        demo_html = (
-            "<span class='demo-badge'>"
-            "DEMO EXAMPLE"
-            "</span>"
-        )
 
     return f"""
     <div class="info-box">
@@ -1379,11 +1742,7 @@ def render_info_box(
         </div>
 
         <div class="info-value">
-
             {esc(value)}
-
-            {demo_html}
-
         </div>
 
     </div>
@@ -1521,20 +1880,20 @@ def render_smart_app(
     clinician_id: str,
     encounter_id: str,
     hook_instance: str,
+    patient_context: Dict[str, Any],
 ) -> str:
 
     trial_id = trial_info[
         "trial_id"
     ]
 
-    match = build_match_explanation(
-        trial_id
+    eligibility = evaluate_trial_eligibility(
+        trial_info["_trial"],
+        patient_context,
     )
 
-    eligibility = (
-        build_demo_eligibility(
-            trial_id
-        )
+    match = build_match_explanation(
+        eligibility
     )
 
     inclusion = (
@@ -1707,16 +2066,6 @@ def render_smart_app(
     # PRINCIPAL INVESTIGATOR
     # ========================================================
 
-    pi_demo_html = ""
-
-    if trial_info["pi_demo"]:
-
-        pi_demo_html = (
-            "<span class='demo-badge'>"
-            "DEMO EXAMPLE"
-            "</span>"
-        )
-
     pi_section = f"""
 
     <div class="pi-card">
@@ -1738,8 +2087,6 @@ def render_smart_app(
                         "pi_name"
                     ]
                 )}
-
-                {pi_demo_html}
 
             </div>
 
@@ -1846,14 +2193,12 @@ def render_smart_app(
 
         {render_info_box(
             "Study duration",
-            trial_info["duration"],
-            trial_info["duration_demo"]
+            trial_info["duration"]
         )}
 
         {render_info_box(
             "Reimbursement",
-            trial_info["reimbursement"],
-            trial_info["reimbursement_demo"]
+            trial_info["reimbursement"]
         )}
 
     </div>
@@ -1968,9 +2313,6 @@ def render_smart_app(
         "Participant reimbursement",
         trial_info[
             "reimbursement"
-        ],
-        trial_info[
-            "reimbursement_demo"
         ],
     )
 
@@ -2600,26 +2942,6 @@ body {{
     font-size: 13px;
 }}
 
-.demo-badge {{
-
-    display: inline-block;
-
-    margin-left: 6px;
-
-    padding: 2px 6px;
-
-    border-radius: 4px;
-
-    background: #fff4df;
-
-    color: #9a5b00;
-
-    font-size: 8px;
-
-    font-weight: 800;
-
-    letter-spacing: .04em;
-}}
 
 
 /* =========================================================
@@ -3462,7 +3784,7 @@ body {{
 }}
 
 
-.radio-option {{
+.radio-option {
 
     display: flex;
     align-items: center;
@@ -3474,15 +3796,15 @@ body {{
     color: #334155;
     font-size: 12px;
     cursor: pointer;
-}}
+}
 
-.radio-option:hover {{
+.radio-option:hover {
     background: #f8fafc;
-}}
+}
 
-.radio-option input {{
+.radio-option input {
     margin: 0;
-}}
+}
 
 /* =========================================================
    RESPONSIVE
@@ -4211,6 +4533,10 @@ async def referral_launch(
         )
     )
 
+    patient_context = fetch_patient_context(
+        patient_id
+    )
+
     return HTMLResponse(
 
         content=render_smart_app(
@@ -4224,6 +4550,8 @@ async def referral_launch(
             encounter_id=encounter_id,
 
             hook_instance=hook_instance,
+
+            patient_context=patient_context,
         )
     )
 
