@@ -12,7 +12,6 @@
       "briefTitle": "HeLaSync Cardiac Amyloidosis Heart Failure Treatment Study",
       "officialTitle": "A Randomized Study of Tafamidis in Adults With Heart Failure and Confirmed Cardiac Amyloidosis"
     },
-
     "statusModule": {
       "statusVerifiedDate": "2026-10",
       "overallStatus": "RECRUITING",
@@ -32,6 +31,7 @@
         "type": "ESTIMATED"
       },
       "studyFirstSubmitDate": "2025-12-01",
+      "studyFirstSubmitDateType": "ACTUAL",
       "studyFirstSubmitQcDate": "2025-12-10",
       "lastUpdateSubmitDate": "2026-10-01",
       "lastUpdatePostDateStruct": {
@@ -39,9 +39,8 @@
         "type": "ACTUAL"
       }
     },
-
     "sponsorCollaboratorsModule": {
-      "respons responsibleParty": {
+      "responsibleParty": {
         "type": "SPONSOR"
       },
       "leadSponsor": {
@@ -49,18 +48,15 @@
         "class": "INDUSTRY"
       }
     },
-
     "oversightModule": {
       "oversightHasDmc": true,
       "isFdaRegulatedDrug": true,
       "isFdaRegulatedDevice": false
     },
-
     "descriptionModule": {
       "briefSummary": "This randomized clinical study evaluates the safety and effectiveness of tafamidis in adults with heart failure and confirmed cardiac amyloidosis. Participants will be followed for 52 weeks to assess clinical outcomes, cardiac biomarkers, functional status, and treatment safety.",
       "detailedDescription": "The study is designed to evaluate the clinical effects of tafamidis in adults with symptomatic heart failure and confirmed cardiac amyloidosis. Eligible participants will undergo baseline clinical assessment followed by protocol-defined study visits over a 52-week treatment period. Study assessments may include medical history review, physical examination, laboratory testing, cardiac biomarker evaluation, electrocardiography, and other protocol-defined cardiac assessments."
     },
-
     "conditionsModule": {
       "conditions": [
         "Heart Failure",
@@ -75,7 +71,6 @@
         "NT-proBNP"
       ]
     },
-
     "designModule": {
       "studyType": "INTERVENTIONAL",
       "phases": [
@@ -98,7 +93,6 @@
         "type": "ESTIMATED"
       }
     },
-
     "armsInterventionsModule": {
       "armGroups": [
         {
@@ -132,7 +126,6 @@
         }
       ]
     },
-
     "outcomesModule": {
       "primaryOutcomes": [
         {
@@ -155,7 +148,6 @@
         }
       ]
     },
-
     "eligibilityModule": {
       "eligibilityCriteria": "Inclusion Criteria:\n1. Age 18 years or older.\n2. Diagnosis of heart failure.\n3. Confirmed diagnosis of cardiac amyloidosis.\n4. NT-proBNP greater than 300 pg/mL.\n\nExclusion Criteria:\n1. Pregnancy.\n2. Severe renal impairment defined as eGFR below 30 mL/min/1.73 m2.",
       "healthyVolunteers": false,
@@ -167,7 +159,6 @@
         "OLDER_ADULT"
       ]
     },
-
     "contactsLocationsModule": {
       "overallOfficials": [
         {
@@ -200,24 +191,18 @@
       ]
     }
   },
-
   "trial_id": "NCTFAKE002",
-
   "pi_name": "Dr. Michael Reynolds, MD",
   "institution": "Front Range Cardiovascular Research Center",
   "research_team": "Amyloidosis & Heart Failure Research Program",
   "research_email": "research@frontrange-cardiac-research.example",
-
   "study_duration": "52 weeks",
-
   "reimbursement": "Up to $1,500 in participant reimbursement for eligible study visits and travel expenses.",
-
   "objectives": [
     "Evaluate the effect of tafamidis on clinical outcomes in adults with heart failure and confirmed cardiac amyloidosis.",
     "Evaluate changes in NT-proBNP and other cardiac biomarkers over 52 weeks.",
     "Assess treatment safety and tolerability."
   ],
-
   "procedures": [
     "Medical history and clinical eligibility review.",
     "Physical examination and vital signs.",
@@ -226,7 +211,6 @@
     "Assessment of functional status.",
     "Follow-up study visits through Week 52."
   ],
-
   "timeline": [
     "Screening and eligibility review.",
     "Baseline study assessment.",
@@ -234,21 +218,17 @@
     "Protocol-defined assessments during Weeks 4, 12, 24, 36, and 52.",
     "Final study assessment at Week 52."
   ],
-
   "risks": [
     "Possible side effects associated with the study intervention.",
     "Additional clinical visits and laboratory testing.",
     "Potential discomfort associated with blood collection and cardiac assessments.",
     "The research team will review study-specific risks before participation."
   ],
-
   "benefits": [
     "Participants may receive the study intervention under controlled research conditions.",
     "Participants may receive additional clinical monitoring during study participation.",
     "Participation may contribute to research evaluating treatment options for cardiac amyloidosis."
   ],
-
   "goal": "Evaluate whether tafamidis improves clinical outcomes and cardiac biomarker measures in adults with heart failure and confirmed cardiac amyloidosis.",
-
   "purpose": "Evaluate the safety and effectiveness of tafamidis in adults with heart failure and confirmed cardiac amyloidosis."
 }
