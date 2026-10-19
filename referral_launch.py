@@ -3784,7 +3784,7 @@ body {{
 }}
 
 
-.radio-option {
+.radio-option {{
 
     display: flex;
     align-items: center;
@@ -3796,15 +3796,15 @@ body {{
     color: #334155;
     font-size: 12px;
     cursor: pointer;
-}
+}}
 
-.radio-option:hover {
+.radio-option:hover {{
     background: #f8fafc;
-}
+}}
 
-.radio-option input {
+.radio-option input {{
     margin: 0;
-}
+}}
 
 /* =========================================================
    RESPONSIVE
