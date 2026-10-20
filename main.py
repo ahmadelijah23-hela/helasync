@@ -830,6 +830,16 @@ context above and return ONLY valid JSON for the final CDS Hooks response.
                                 + detail[len("HeLaSync: "):]
                             )
 
+                        # Remove the HeLaSync sponsor/platform prefix from
+                        # the trial name itself. Keep the source label
+                        # "HeLaSync" unchanged. This is the only card-copy
+                        # correction applied here.
+                        if detail.startswith("Clinical Trial: HeLaSync "):
+                            detail = (
+                                "Clinical Trial: "
+                                + detail[len("Clinical Trial: HeLaSync "):]
+                            )
+
                         # If Agent 5 did not provide a usable trial name,
                         # use the canonical name from the trial record.
                         if canonical_trial_name and (
