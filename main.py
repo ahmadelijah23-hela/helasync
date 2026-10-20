@@ -560,11 +560,12 @@ Do not invent missing clinical information.
 Sanitized patient context:
 {patient_context}
 
-Original CDS Hooks context:
-{json.dumps(context, indent=2, default=str)}
+Do not use the original CDS Hooks context for clinical reasoning.
+The original context may contain direct identifiers and is retained
+by the API layer only for routing and Smart App launch metadata.
 
-Run the HeLaSync 5-agent pipeline and return ONLY valid JSON for
-the final CDS Hooks response.
+Run the HeLaSync 5-agent pipeline using ONLY the sanitized patient
+context above and return ONLY valid JSON for the final CDS Hooks response.
 """
 
         # --------------------------------------------------------
@@ -591,11 +592,35 @@ the final CDS Hooks response.
 
         final_output = None
 
+        # --------------------------------------------------------
+        # PIPELINE DIAGNOSTICS
+        # --------------------------------------------------------
+        # Track which ADK agents actually execute and which state
+        # output keys are produced. We intentionally log only agent
+        # names / state-key names, never the patient's clinical data.
+        pipeline_agents_seen = []
+        pipeline_state_keys = []
+
         async for event in runner.run_async(
             user_id=user_id,
             session_id=session.id,
             new_message=content,
         ):
+            author = getattr(event, "author", None)
+
+            if author and author not in pipeline_agents_seen:
+                pipeline_agents_seen.append(author)
+                print(f"PIPELINE AGENT COMPLETED/EVENT: {author}")
+
+            actions = getattr(event, "actions", None)
+            state_delta = getattr(actions, "state_delta", None) if actions else None
+
+            if isinstance(state_delta, dict):
+                for key in state_delta.keys():
+                    if key not in pipeline_state_keys:
+                        pipeline_state_keys.append(key)
+                        print(f"PIPELINE STATE KEY PRODUCED: {key}")
+
             if event.is_final_response():
                 if event.content and event.content.parts:
                     final_output = "".join(
@@ -603,6 +628,19 @@ the final CDS Hooks response.
                         for part in event.content.parts
                         if getattr(part, "text", None)
                     )
+
+        print("")
+        print("=" * 80)
+        print("HELASYNC PIPELINE DIAGNOSTICS")
+        print("=" * 80)
+        print(f"Agents/events seen: {pipeline_agents_seen}")
+        print(f"State keys produced: {pipeline_state_keys}")
+        print(f"Agent 1 patient_data present: {'patient_data' in pipeline_state_keys}")
+        print(f"Agent 2 clinical_profile present: {'clinical_profile' in pipeline_state_keys}")
+        print(f"Agent 3 trial_matches present: {'trial_matches' in pipeline_state_keys}")
+        print(f"Agent 4 eligibility_results present: {'eligibility_results' in pipeline_state_keys}")
+        print(f"Final Agent 5 response present: {bool(final_output)}")
+        print("=" * 80)
 
         # --------------------------------------------------------
         # 8. Parse final Agent 5 JSON.
@@ -723,16 +761,14 @@ the final CDS Hooks response.
                                     f"{detail.rstrip()}\n\nPI: {pi_name}"
                                 )
 
-                        # Preserve the existing card content and formatting,
-                        # changing ONLY the trial-label wording.
-                        if detail.startswith("HeLaSync: "):
+                        # If Agent 5 did not provide a usable trial name,
+                        # use the canonical name from the trial record.
+                        if canonical_trial_name and (
+                            not detail
+                            or detail.strip() == "HeLaSync:"
+                        ):
                             detail = (
-                                "Clinical Trial: "
-                                + detail[len("HeLaSync: "):]
-                            )
-                        elif canonical_trial_name and not detail:
-                            detail = (
-                                f"Clinical Trial: {canonical_trial_name}"
+                                f"HeLaSync: {canonical_trial_name}"
                             )
 
                 except Exception as trial_metadata_error:
