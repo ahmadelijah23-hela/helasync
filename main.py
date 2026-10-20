@@ -600,6 +600,7 @@ context above and return ONLY valid JSON for the final CDS Hooks response.
         # names / state-key names, never the patient's clinical data.
         pipeline_agents_seen = []
         pipeline_state_keys = []
+        pipeline_state_values = {}
 
         async for event in runner.run_async(
             user_id=user_id,
@@ -616,10 +617,11 @@ context above and return ONLY valid JSON for the final CDS Hooks response.
             state_delta = getattr(actions, "state_delta", None) if actions else None
 
             if isinstance(state_delta, dict):
-                for key in state_delta.keys():
+                for key, value in state_delta.items():
                     if key not in pipeline_state_keys:
                         pipeline_state_keys.append(key)
                         print(f"PIPELINE STATE KEY PRODUCED: {key}")
+                    pipeline_state_values[key] = value
 
             if event.is_final_response():
                 if event.content and event.content.parts:
@@ -640,6 +642,64 @@ context above and return ONLY valid JSON for the final CDS Hooks response.
         print(f"Agent 3 trial_matches present: {'trial_matches' in pipeline_state_keys}")
         print(f"Agent 4 eligibility_results present: {'eligibility_results' in pipeline_state_keys}")
         print(f"Final Agent 5 response present: {bool(final_output)}")
+
+        # --------------------------------------------------------
+        # SAFE PIPELINE CONTENT DIAGNOSTICS
+        # --------------------------------------------------------
+        # Log only structural information needed to diagnose matching.
+        # Do NOT log patient identifiers, clinical values, or raw state.
+        def _safe_json(value):
+            if isinstance(value, str):
+                try:
+                    return json.loads(value)
+                except Exception:
+                    return None
+            if isinstance(value, dict) or isinstance(value, list):
+                return value
+            return None
+
+        trial_matches_state = _safe_json(pipeline_state_values.get("trial_matches"))
+        eligibility_state = _safe_json(pipeline_state_values.get("eligibility_results"))
+        cds_state = _safe_json(pipeline_state_values.get("cds_card"))
+
+        print("PIPELINE CONTENT DIAGNOSTICS")
+        if isinstance(trial_matches_state, dict):
+            candidates = trial_matches_state.get("candidate_trials", [])
+            if isinstance(candidates, list):
+                print(f"Agent 3 candidate trial count: {len(candidates)}")
+                print("Agent 3 candidate trial IDs: " + str([
+                    c.get("trial_id") for c in candidates
+                    if isinstance(c, dict) and c.get("trial_id")
+                ]))
+            else:
+                print("Agent 3 candidate_trials type: " + type(candidates).__name__)
+        else:
+            print("Agent 3 trial_matches parseable JSON: False")
+
+        if isinstance(eligibility_state, dict):
+            print("Agent 4 verification_status: " + str(eligibility_state.get("verification_status")))
+            verified = eligibility_state.get("verified_trials", [])
+            if isinstance(verified, list):
+                print(f"Agent 4 verified trial count: {len(verified)}")
+                print("Agent 4 trial statuses: " + str([
+                    {
+                        "trial_id": v.get("trial_id"),
+                        "overall_status": v.get("overall_status")
+                    }
+                    for v in verified
+                    if isinstance(v, dict)
+                ]))
+            else:
+                print("Agent 4 verified_trials type: " + type(verified).__name__)
+        else:
+            print("Agent 4 eligibility_results parseable JSON: False")
+
+        if isinstance(cds_state, dict):
+            cds_cards = cds_state.get("cards", [])
+            print(f"Agent 5 cds_card count: {len(cds_cards) if isinstance(cds_cards, list) else 'non-list'}")
+        else:
+            print("Agent 5 cds_card parseable JSON: False")
+
         print("=" * 80)
 
         # --------------------------------------------------------
