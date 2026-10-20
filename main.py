@@ -723,14 +723,16 @@ the final CDS Hooks response.
                                     f"{detail.rstrip()}\n\nPI: {pi_name}"
                                 )
 
-                        # If Agent 5 did not provide a usable trial name,
-                        # use the canonical name from the trial record.
-                        if canonical_trial_name and (
-                            not detail
-                            or detail.strip() == "HeLaSync:"
-                        ):
+                        # Preserve the existing card content and formatting,
+                        # changing ONLY the trial-label wording.
+                        if detail.startswith("HeLaSync: "):
                             detail = (
-                                f"HeLaSync: {canonical_trial_name}"
+                                "Clinical Trial: "
+                                + detail[len("HeLaSync: "):]
+                            )
+                        elif canonical_trial_name and not detail:
+                            detail = (
+                                f"Clinical Trial: {canonical_trial_name}"
                             )
 
                 except Exception as trial_metadata_error:
