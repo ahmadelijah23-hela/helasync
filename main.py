@@ -828,7 +828,7 @@ context above and return ONLY valid JSON for the final CDS Hooks response.
                             or detail.strip() == "HeLaSync:"
                         ):
                             detail = (
-                                f"HeLaSync: {canonical_trial_name}"
+                                f"Clinical Trial: {canonical_trial_name}"
                             )
 
                 except Exception as trial_metadata_error:
