@@ -1488,9 +1488,26 @@ def build_trial_information(
     # OVERVIEW CONTENT
     # --------------------------------------------------------
 
-    description_module = trial.get(
-        "descriptionModule",
+    # ClinicalTrials-style records store descriptionModule inside
+    # protocolSection. Keep the top-level lookup as a compatibility
+    # fallback for simpler/custom trial JSON files.
+    protocol_section = trial.get(
+        "protocolSection",
         {}
+    )
+
+    if not isinstance(
+        protocol_section,
+        dict
+    ):
+        protocol_section = {}
+
+    description_module = protocol_section.get(
+        "descriptionModule",
+        trial.get(
+            "descriptionModule",
+            {}
+        )
     )
 
     if not isinstance(
@@ -3784,7 +3801,7 @@ body {{
 }}
 
 
-.radio-option {{
+.radio-option {
 
     display: flex;
     align-items: center;
@@ -3796,15 +3813,15 @@ body {{
     color: #334155;
     font-size: 12px;
     cursor: pointer;
-}}
+}
 
-.radio-option:hover {{
+.radio-option:hover {
     background: #f8fafc;
-}}
+}
 
-.radio-option input {{
+.radio-option input {
     margin: 0;
-}}
+}
 
 /* =========================================================
    RESPONSIVE
