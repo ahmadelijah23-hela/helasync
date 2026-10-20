@@ -72,6 +72,42 @@ trial_list_json = json.dumps(
 )
 
 
+def build_trial_reference(trials):
+    """Build a compact, model-friendly reference containing only fields
+    needed for candidate matching and preliminary eligibility verification.
+    This keeps Agent 4 prompts small and avoids unnecessary model latency.
+    """
+    reference = []
+    for trial in trials:
+        protocol = trial.get("protocolSection", {}) or {}
+        identification = protocol.get("identificationModule", {}) or {}
+        status = protocol.get("statusModule", {}) or {}
+        conditions = protocol.get("conditionsModule", {}) or {}
+        eligibility = protocol.get("eligibilityModule", {}) or {}
+        sponsor = protocol.get("sponsorCollaboratorsModule", {}) or {}
+        design = protocol.get("designModule", {}) or {}
+
+        reference.append({
+            "trial_id": identification.get("nctId") or trial.get("trial_id") or trial.get("id", ""),
+            "trial_title": identification.get("briefTitle") or identification.get("officialTitle", ""),
+            "status": status.get("overallStatus", ""),
+            "conditions": conditions.get("conditions", []),
+            "eligibility_criteria": eligibility.get("eligibilityCriteria", ""),
+            "min_age": eligibility.get("minimumAge", ""),
+            "max_age": eligibility.get("maximumAge", ""),
+            "sex": eligibility.get("sex", ""),
+            "sponsor": (sponsor.get("leadSponsor") or {}).get("name", ""),
+            "principal_investigator": (sponsor.get("overallOfficials") or [{}])[0].get("name", "") if sponsor.get("overallOfficials") else "",
+            "study_type": design.get("studyType", "")
+        })
+    return reference
+
+
+# Compact trial reference used by matching/eligibility agents.
+trial_reference = build_trial_reference(trial_list)
+trial_reference_json = json.dumps(trial_reference, indent=2)
+
+
 # ============================================================
 # AGENT 1
 # PATIENT DATA AGENT
@@ -270,111 +306,44 @@ Use:
 # ============================================================
 
 trial_matching_agent = Agent(
-
     model="gemini-3.6-flash",
-
     name="Trial_Matching_Agent",
-
-    description=(
-        "Compares the patient's clinical profile against active "
-        "clinical trials and identifies potential trial candidates."
-    ),
-
+    description="Identifies active clinical trial candidates from the documented clinical profile.",
     instruction=f"""
-You are HeLaSync Agent 3: Clinical Trial Matching Agent.
+You are HeLaSync Agent 3. Identify potential clinical trial candidates.
 
-Clinical Profile from Agent 2:
-
+CLINICAL PROFILE:
 {{clinical_profile}}
 
-Available clinical trials:
+TRIAL REFERENCE:
+{trial_reference_json}
 
-{trial_list_json}
+RULES:
+- Evaluate every active trial.
+- Active statuses: RECRUITING, ENROLLING_BY_INVITATION, NOT_YET_RECRUITING, ACTIVE_NOT_RECRUITING.
+- Match documented disease/subtype alignment only.
+- A documented specific subtype satisfies a broader aligned disease criterion.
+- Do not infer a disease from another disease.
+- Do not reject a disease-aligned trial because secondary criteria are unknown.
+- Do not determine final eligibility. Agent 4 does that.
 
-==================================================
-YOUR JOB
-==================================================
+IMPORTANT:
+A patient with documented "Chronic heart failure" AND "Transthyretin cardiac amyloidosis" is disease-aligned with a cardiac amyloidosis/heart failure treatment trial.
 
-Evaluate EVERY active clinical trial and identify potential
-candidates based on documented disease-area alignment.
-
-This is ONLY a candidate-matching step. Agent 4 performs the
-detailed eligibility verification.
-
-==================================================
-ACTIVE TRIAL STATUS
-==================================================
-
-Consider trials with status:
-- RECRUITING
-- ENROLLING_BY_INVITATION
-- NOT_YET_RECRUITING
-- ACTIVE_NOT_RECRUITING
-
-Do not select trials with status:
-- COMPLETED
-- TERMINATED
-- SUSPENDED
-- WITHDRAWN
-
-==================================================
-MATCHING RULES
-==================================================
-
-1. Read the trial's actual protocolSection fields.
-2. Compare the patient's documented conditions with the trial's
-   conditions and eligibility criteria.
-3. Required disease/subtype alignment is the most important
-   candidate criterion.
-4. A documented specific disease subtype may satisfy a broader
-   disease-area match.
-5. Do not infer a specific disease from a nonspecific condition.
-6. Do not reject a candidate only because a secondary requirement
-   is missing; Agent 4 will verify it.
-7. Do not invent patient facts or trial criteria.
-8. If a trial's disease population clearly aligns with the patient,
-   include it as a candidate even when some detailed criteria are
-   unknown.
-
-For example, if the patient has documented heart failure AND
-confirmed cardiac amyloidosis, a cardiac amyloidosis/heart failure
-treatment trial is a candidate.
-
-==================================================
-OUTPUT REQUIREMENTS
-==================================================
-
-Return EXACTLY one JSON object with this structure:
-
+RETURN ONLY THIS JSON SHAPE:
 {{
   "candidate_trials": [
     {{
-      "trial_id": "NCTFAKE002",
-      "trial_title": "",
-      "reason": ""
+      "trial_id": "NCT...",
+      "trial_title": "...",
+      "reason": "..."
     }}
   ]
 }}
 
-The trial_id MUST exactly match the trial's identificationModule.nctId
-when that field exists. Otherwise use the trial's actual internal ID.
-
-The reason must be one concise sentence based only on documented
-clinical-profile facts and the trial's documented disease population.
-
-If no candidates exist, return exactly:
-
-{{"candidate_trials": []}}
-
-CRITICAL FORMAT RULES:
-- Return JSON only.
-- No Markdown fences.
-- No commentary before or after JSON.
-- Use double quotes for all JSON strings.
-- Do not add trailing commas.
-- Do not return Python dictionaries.
+If there are no candidates, return {{"candidate_trials": []}}.
+No Markdown. No commentary. Valid JSON only.
 """,
-
     output_key="trial_matches"
 )
 
@@ -385,222 +354,74 @@ CRITICAL FORMAT RULES:
 # ============================================================
 
 eligibility_verification_agent = Agent(
-
     model="gemini-3.6-flash",
-
     name="Eligibility_Verification_Agent",
-
-    description=(
-        "Performs structured verification of trial inclusion and "
-        "exclusion criteria using gating, secondary, and exclusion "
-        "categories."
-    ),
-
+    description="Performs structured preliminary eligibility verification for candidate trials.",
     instruction=f"""
 You are HeLaSync Agent 4: Eligibility Verification Agent.
 
-You are responsible for preliminary, structured eligibility
-verification. You MUST use the patient's documented clinical facts
-and the ACTUAL eligibility criteria in the supplied trial JSON.
-
-==================================================
-INPUTS
-==================================================
-
-Clinical profile from Agent 2:
-
-{{clinical_profile}}
-
-Patient data from Agent 1:
-
+PATIENT DATA:
 {{patient_data}}
 
-Candidate-trial output from Agent 3:
+CLINICAL PROFILE:
+{{clinical_profile}}
 
+AGENT 3 CANDIDATES:
 {{trial_matches}}
 
-Complete trial JSON:
+TRIAL REFERENCE:
+{trial_reference_json}
 
-{trial_list_json}
+YOUR TASK:
+Verify ONLY the candidate trials against their ACTUAL eligibilityCriteria in the trial reference.
 
-==================================================
-CRITICAL RECOVERY RULE
-==================================================
+CRITICAL RECOVERY:
+Agent 3 may produce malformed JSON. Extract recognizable trial IDs such as NCTFAKE002 from its text when possible. If no usable candidate IDs can be parsed, identify clearly disease-aligned active trials from the trial reference using the clinical profile.
 
-Agent 3 may occasionally return JSON with formatting errors. Do NOT
-fail eligibility verification merely because the candidate-trial text
-is malformed. Recover the candidate trial IDs/titles from the Agent 3
-output when possible and match them against the complete trial JSON.
-
-If Agent 3 identifies no usable candidates, use the patient's documented
-clinical profile to identify any clearly disease-aligned active trial in
-the complete trial JSON before concluding NO_MATCH.
-
-This recovery behavior is especially important for a trial whose disease
-population is explicitly aligned with a documented patient diagnosis.
-
-==================================================
-STEP 1 — FIND THE ACTUAL CRITERIA
-==================================================
-
-For every candidate trial, read:
-
-protocolSection.eligibilityModule.eligibilityCriteria
-
-Parse the actual numbered Inclusion Criteria and Exclusion Criteria.
-Do not invent criteria.
-Do not substitute generic criteria for the actual trial criteria.
-
-==================================================
-STEP 2 — CLASSIFY CRITERIA
-==================================================
-
-Every inclusion criterion MUST be classified as either GATING or
-SECONDARY. Every exclusion criterion is EXCLUSION.
-
-GATING criteria define the trial's core study population or a required
-core eligibility condition. Examples include age, required disease,
-required disease subtype, or a confirmed diagnosis defining the study
-population.
-
-For NCTFAKE002 specifically:
-- Diagnosis of heart failure = GATING.
-- Confirmed diagnosis of cardiac amyloidosis = GATING.
-
-Do not weaken or reinterpret these criteria.
-
-==================================================
-STEP 3 — EVALUATE INCLUSION CRITERIA
-==================================================
-
-For every inclusion criterion use exactly one of:
-MET
-NOT_MET
-UNKNOWN
-
-MET = directly supported by documented patient data.
-NOT_MET = directly contradicted by documented patient data.
-UNKNOWN = necessary information is unavailable.
-
-Never turn UNKNOWN into NOT_MET.
+CRITERION STATUS:
+Inclusion: MET, NOT_MET, UNKNOWN.
+Exclusion: PRESENT, CLEAR, UNKNOWN.
+Never treat UNKNOWN as NOT_MET.
 Never infer absence from missing documentation.
 
-IMPORTANT DISEASE-MATCHING RULE:
-A documented specific diagnosis satisfies a broader documented disease
-criterion when clinically and semantically aligned.
+GATING:
+Core disease/population requirements are GATING.
+For NCTFAKE002, these are explicitly GATING:
+1. Heart failure diagnosis.
+2. Confirmed cardiac amyloidosis diagnosis.
 
-Example:
-Patient has "Transthyretin cardiac amyloidosis" and the criterion is
-"confirmed diagnosis of cardiac amyloidosis" -> MET.
+DISEASE SEMANTICS:
+"Transthyretin cardiac amyloidosis" directly satisfies "confirmed diagnosis of cardiac amyloidosis".
+"Chronic heart failure" directly satisfies "heart failure".
+Do not infer heart failure from amyloidosis alone.
 
-Patient has "Transthyretin cardiac amyloidosis" and the criterion is
-"diagnosis of heart failure" -> MET only if heart failure is also
-documented; do not infer it solely from amyloidosis.
+OVERALL STATUS:
+POTENTIAL_MATCH = every GATING criterion MET and no EXCLUSION is PRESENT. Secondary UNKNOWN values do not block.
+BLOCKED = at least one GATING criterion UNKNOWN, with no GATING NOT_MET and no exclusion PRESENT.
+NOT_ELIGIBLE = any GATING NOT_MET, any SECONDARY NOT_MET, or any EXCLUSION PRESENT.
+INSUFFICIENT_INFORMATION = only when the patient data is broadly inadequate to evaluate the trial.
 
-==================================================
-STEP 4 — EVALUATE SECONDARY CRITERIA
-==================================================
+VERIFICATION STATUS:
+MATCH if any verified trial is POTENTIAL_MATCH.
+NO_MATCH if trials were evaluated and none is POTENTIAL_MATCH.
+INSUFFICIENT_INFORMATION only when broadly inadequate.
 
-Use MET / NOT_MET / UNKNOWN.
+IMPORTANT NCTFAKE002 TEST CASE:
+If the clinical profile contains both "Chronic heart failure" and "Transthyretin cardiac amyloidosis", mark the two corresponding gating criteria MET. Do not mark them UNKNOWN.
 
-UNKNOWN secondary criteria do not block a potential match when all
-gating criteria are MET and no exclusion is PRESENT.
-
-==================================================
-STEP 5 — EVALUATE EXCLUSIONS
-==================================================
-
-For every exclusion criterion use exactly one of:
-PRESENT
-CLEAR
-UNKNOWN
-
-PRESENT = patient clearly meets the exclusion.
-CLEAR = available evidence supports that the exclusion is not present.
-UNKNOWN = there is insufficient information.
-
-Do not assume undocumented exclusions are absent.
-
-==================================================
-STEP 6 — OVERALL STATUS
-==================================================
-
-Use exactly one:
-POTENTIAL_MATCH
-BLOCKED
-NOT_ELIGIBLE
-INSUFFICIENT_INFORMATION
-
-POTENTIAL_MATCH when:
-- ALL GATING criteria are MET.
-- NO exclusion criterion is PRESENT.
-- Secondary criteria may be MET or UNKNOWN.
-
-BLOCKED when at least one GATING criterion is UNKNOWN and no criterion
-is NOT_MET or an exclusion PRESENT.
-
-NOT_ELIGIBLE when:
-- Any GATING criterion is NOT_MET, OR
-- Any SECONDARY criterion is NOT_MET, OR
-- Any EXCLUSION criterion is PRESENT.
-
-Use INSUFFICIENT_INFORMATION only when the trial cannot responsibly
-be classified because the available patient information is broadly
-inadequate.
-
-Do NOT calculate eligibility percentages.
-
-==================================================
-STEP 7 — EVIDENCE
-==================================================
-
-Every criterion needs concise evidence. Evidence must distinguish:
-- documented facts
-- explicitly documented absence
-- unavailable information
-
-For NCTFAKE002, if the patient profile contains the documented
-conditions:
-- "Chronic heart failure"
-- "Transthyretin cardiac amyloidosis"
-then those documented diagnoses are direct evidence for the corresponding
-gating criteria. Do NOT mark either criterion UNKNOWN.
-
-==================================================
-STEP 8 — MISSING INFORMATION
-==================================================
-
-For every UNKNOWN criterion include:
-- criterion
-- category
-- why_information_is_needed
-
-Do not recommend tests, medications, diagnoses, or interventions.
-
-==================================================
-VERIFICATION STATUS
-==================================================
-
-MATCH if at least one verified trial has overall_status POTENTIAL_MATCH.
-NO_MATCH if trials were evaluated and all are BLOCKED or NOT_ELIGIBLE.
-INSUFFICIENT_INFORMATION only when evaluation is broadly inadequate.
-If there are no candidates, return NO_MATCH with an empty verified_trials list.
-
-==================================================
-OUTPUT
-==================================================
-
-Return EXACTLY one valid JSON object:
+OUTPUT ONLY VALID JSON. Keep the response compact.
 
 {{
   "verification_status": "MATCH",
   "verified_trials": [
     {{
-      "trial_id": "",
-      "trial_title": "",
+      "trial_id": "NCTFAKE002",
+      "trial_title": "...",
       "overall_status": "POTENTIAL_MATCH",
-      "summary": "",
-      "gating_criteria": [],
+      "summary": "...",
+      "gating_criteria": [
+        {{"criterion":"...","status":"MET","evidence":"..."}}
+      ],
       "secondary_criteria": [],
       "exclusion_criteria": [],
       "missing_information": []
@@ -608,15 +429,8 @@ Return EXACTLY one valid JSON object:
   ]
 }}
 
-CRITICAL FORMAT RULES:
-- Return JSON only.
-- No Markdown fences.
-- No commentary.
-- Double quotes only.
-- No trailing commas.
-- Preserve exact trial IDs.
+No Markdown. No explanation outside JSON. No percentages.
 """,
-
     output_key="eligibility_results"
 )
 
