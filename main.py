@@ -821,6 +821,15 @@ context above and return ONLY valid JSON for the final CDS Hooks response.
                                     f"{detail.rstrip()}\n\nPI: {pi_name}"
                                 )
 
+                        # Lock the clinician-facing trial label.
+                        # Agent 5 may return the legacy "HeLaSync: " prefix;
+                        # the CDS card must display "Clinical Trial: " instead.
+                        if detail.startswith("HeLaSync: "):
+                            detail = (
+                                "Clinical Trial: "
+                                + detail[len("HeLaSync: "):]
+                            )
+
                         # If Agent 5 did not provide a usable trial name,
                         # use the canonical name from the trial record.
                         if canonical_trial_name and (
